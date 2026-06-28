@@ -98,7 +98,7 @@ type WhiteboardElement = BoxElement | LineElement | TextElement | ImageElement
 type Board = { elements: WhiteboardElement[]; updatedAt: string }
 type Tool = 'select' | 'line' | 'box' | 'text' | 'image' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
-type Draft = { tool: 'line' | 'box'; start: Point; current: Point; startAnchor?: Anchor }
+type Draft = { tool: 'line' | 'box' | 'image'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
 type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw'
 type Resize = { id: number; origin: Point; element: BoxElement | TextElement | ImageElement; handle: ResizeHandle }
@@ -228,7 +228,7 @@ function App() {
     setSelectedId(null)
     setInlineEdit(null)
 
-    if (tool === 'line' || tool === 'box') {
+    if (tool === 'line' || tool === 'box' || tool === 'image') {
       captureBeforeSnapshot()
       setDraft({ tool, start: point, current: point })
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -255,13 +255,6 @@ function App() {
       setTool('select')
     }
 
-    if (tool === 'image') {
-      const description = window.prompt('Describe the image')
-      if (!description) return
-      captureBeforeSnapshot()
-      void createImageElement(description, point)
-      setTool('select')
-    }
   }
 
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
@@ -336,6 +329,19 @@ function App() {
         }
         void commitBoard([...board.elements, element])
         setSelectedId(element.id)
+      }
+      if (draft.tool === 'image' && width > 8 && height > 8) {
+        const description = window.prompt('Describe the image')
+        if (description) {
+          void createImageElement(description, {
+            x: Math.min(draft.start.x, current.x),
+            y: Math.min(draft.start.y, current.y),
+            width,
+            height,
+          })
+        } else {
+          beforeScreenshotRef.current = null
+        }
       }
       setDraft(null)
       setTool('select')
@@ -502,23 +508,24 @@ function App() {
     beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
   }
 
-  const createImageElement = async (description: string, point: Point) => {
+  const createImageElement = async (description: string, frame: { x: number; y: number; width: number; height: number }) => {
     const response = await fetch('/api/ai/image-svg', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description }),
     })
     const result = await response.json()
+    const fitted = fitFrameToSvg(frame, result.svg)
     const element: ImageElement = {
       id: nextId,
       type: 'image',
       description,
       svg: result.svg,
       renderAttempts: result.renderAttempts,
-      x: point.x,
-      y: point.y,
-      width: 320,
-      height: 220,
+      x: frame.x,
+      y: frame.y,
+      width: fitted.width,
+      height: fitted.height,
     }
     void commitBoard([...board.elements, element])
     setSelectedId(element.id)
@@ -579,9 +586,10 @@ function App() {
       })
       const result = await response.json()
       const nextDescription = mode === 'refine' ? `${element.description}; ${instruction}` : element.description
+      const fitted = fitFrameToSvg(element, result.svg)
       const elements = board.elements.map((candidate) =>
         candidate.id === element.id
-          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts } satisfies ImageElement)
+          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
           : candidate,
       )
       void commitBoard(elements)
@@ -774,6 +782,52 @@ function svgParseError(svg: string) {
 
 function svgDataUrl(svg: string) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+function fitFrameToSvg(frame: { width: number; height: number }, svg: string) {
+  const ratio = svgAspectRatio(svg)
+  if (!ratio || frame.width <= 0 || frame.height <= 0) {
+    return { width: frame.width, height: frame.height }
+  }
+
+  const frameRatio = frame.width / frame.height
+  if (Math.abs(frameRatio - ratio) < 0.01) {
+    return { width: frame.width, height: frame.height }
+  }
+
+  if (frameRatio < ratio) {
+    return { width: frame.height * ratio, height: frame.height }
+  }
+
+  return { width: frame.width, height: frame.width / ratio }
+}
+
+function svgAspectRatio(svg: string) {
+  const document = new DOMParser().parseFromString(svg, 'image/svg+xml')
+  const root = document.documentElement
+  if (!root || root.tagName.toLowerCase() !== 'svg') return null
+
+  const viewBox = root.getAttribute('viewBox')
+  if (viewBox) {
+    const parts = viewBox.split(/[\s,]+/).map(Number)
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      return parts[2] / parts[3]
+    }
+  }
+
+  const width = svgLength(root.getAttribute('width'))
+  const height = svgLength(root.getAttribute('height'))
+  if (width && height) {
+    return width / height
+  }
+
+  return null
+}
+
+function svgLength(value: string | null) {
+  if (!value) return null
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: number): WhiteboardElement {
@@ -1238,6 +1292,9 @@ function DraftView({
   const y = Math.min(draft.start.y, draft.current.y)
   const width = Math.abs(draft.current.x - draft.start.x)
   const height = Math.abs(draft.current.y - draft.start.y)
+  if (draft.tool === 'image') {
+    return <rect x={x} y={y} width={width} height={height} rx="4" fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+  }
   if (boxShape === 'oval') {
     return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
   }

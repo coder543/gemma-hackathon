@@ -36,6 +36,7 @@
 - [x] Encourage animated SVG output for generated image boxes.
 - [x] Detect SVG render failures and automatically ask the model to repair using previous render-attempt history.
 - [x] Add regenerate/refine controls for AI image boxes.
+- [x] Prompt for AI image descriptions after the user drags the desired frame and fit generated SVG aspect ratios.
 - [ ] Add more focused interactive AI commands for selected board elements.
 
 ## Deferred: Assistant Loop
