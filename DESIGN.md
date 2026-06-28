@@ -83,6 +83,9 @@ The first implementation includes:
 - SVG whiteboard surface.
 - Draw box, line, and text.
 - Select, drag, inspect, edit, erase, and clear.
+- Double-click inline editing for box labels, line labels, and floating text.
+- Box-side anchoring when drawing lines from or to boxes.
+- Local drag/edit previews with backend commits only when the interaction is complete.
 - In-memory backend persistence.
 - History list with placeholder commit descriptions.
 - JSON state preview and screenshot capture.

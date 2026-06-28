@@ -12,9 +12,11 @@
 
 ## Phase 2: Whiteboard Graph Quality
 
+- [x] Add double-click inline editing for labels and floating text.
+- [x] Commit drag and text-edit interactions only when the interaction is complete.
+- [x] Add first-pass box-side anchors for line endpoints.
 - [ ] Add robust resize handles for boxes and text.
 - [ ] Add line endpoint editing.
-- [ ] Add box-side anchors for line endpoints.
 - [ ] Render cloud boxes with a better cloud shape.
 - [ ] Add undo/redo.
 - [ ] Replace placeholder history descriptions with generated summaries.

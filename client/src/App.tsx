@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { PointerEvent, ReactNode } from 'react'
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode, RefObject } from 'react'
 import html2canvas from 'html2canvas'
 import {
   Box,
@@ -29,7 +29,8 @@ import {
 import './App.css'
 
 type Point = { x: number; y: number }
-type Anchor = { elementId: number; side: 'top' | 'right' | 'bottom' | 'left' | 'center' }
+type AnchorSide = 'top' | 'right' | 'bottom' | 'left' | 'center'
+type Anchor = { elementId: number; side: AnchorSide }
 type ElementStyle = {
   stroke?: string
   fill?: string
@@ -75,7 +76,9 @@ type WhiteboardElement = BoxElement | LineElement | TextElement
 type Board = { elements: WhiteboardElement[]; updatedAt: string }
 type Tool = 'select' | 'line' | 'box' | 'text' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
-type Draft = { tool: 'line' | 'box'; start: Point; current: Point }
+type Draft = { tool: 'line' | 'box'; start: Point; current: Point; startAnchor?: Anchor }
+type Drag = { id: number; origin: Point; element: WhiteboardElement }
+type InlineEdit = { id: number; value: string }
 
 const defaultBoard: Board = { elements: [], updatedAt: new Date().toISOString() }
 const colors = ['#1f2937', '#2563eb', '#e11d48', '#16a34a', '#f59e0b']
@@ -89,7 +92,8 @@ function App() {
   const [lineStyle, setLineStyle] = useState<LineElement['lineStyle']>('plain')
   const [stroke, setStroke] = useState(colors[0])
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [drag, setDrag] = useState<{ id: number; origin: Point; element: WhiteboardElement } | null>(null)
+  const [drag, setDrag] = useState<Drag | null>(null)
+  const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const boardRef = useRef<HTMLDivElement | null>(null)
 
@@ -125,7 +129,7 @@ function App() {
     [board.elements],
   )
 
-  const pointFromEvent = (event: PointerEvent<SVGSVGElement>): Point => {
+  const pointFromSvgEvent = (event: PointerEvent<SVGSVGElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect()
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
@@ -136,7 +140,7 @@ function App() {
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
-  const updateSelected = (patch: Partial<BoxElement> | Partial<LineElement> | Partial<TextElement>) => {
+  const commitSelectedPatch = (patch: Partial<BoxElement> | Partial<LineElement> | Partial<TextElement>) => {
     if (selectedId === null) return
     void commitBoard(
       board.elements.map((element) =>
@@ -145,10 +149,20 @@ function App() {
     )
   }
 
+  const startLineDraft = (point: Point, startAnchor?: Anchor, svg?: SVGSVGElement | null, pointerId?: number) => {
+    setSelectedId(null)
+    setInlineEdit(null)
+    setDraft({ tool: 'line', start: point, current: point, startAnchor })
+    if (svg && pointerId !== undefined) {
+      svg.setPointerCapture(pointerId)
+    }
+  }
+
   const handlePointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (event.target !== event.currentTarget) return
-    const point = pointFromEvent(event)
+    const point = pointFromSvgEvent(event)
     setSelectedId(null)
+    setInlineEdit(null)
 
     if (tool === 'line' || tool === 'box') {
       setDraft({ tool, start: point, current: point })
@@ -176,7 +190,7 @@ function App() {
   }
 
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
-    const point = pointFromEvent(event)
+    const point = pointFromSvgEvent(event)
     if (draft) {
       setDraft({ ...draft, current: point })
       return
@@ -192,18 +206,21 @@ function App() {
     }
   }
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (event: PointerEvent<SVGSVGElement>) => {
+    const point = pointFromSvgEvent(event)
+
     if (draft) {
-      const width = Math.abs(draft.current.x - draft.start.x)
-      const height = Math.abs(draft.current.y - draft.start.y)
+      const current = point
+      const width = Math.abs(current.x - draft.start.x)
+      const height = Math.abs(current.y - draft.start.y)
       if (draft.tool === 'box' && width > 8 && height > 8) {
         const element: BoxElement = {
           id: nextId,
           type: 'box',
           shape: boxShape,
           label: 'Label',
-          x: Math.min(draft.start.x, draft.current.x),
-          y: Math.min(draft.start.y, draft.current.y),
+          x: Math.min(draft.start.x, current.x),
+          y: Math.min(draft.start.y, current.y),
           width,
           height,
           style: { stroke, fill: '#ffffff', strokeWidth: 2 },
@@ -212,12 +229,16 @@ function App() {
         setSelectedId(element.id)
       }
       if (draft.tool === 'line' && (width > 8 || height > 8)) {
+        const endAnchor = anchorAtPoint(board.elements, current)
+        const end = endAnchor ? pointForAnchor(board.elements, endAnchor) : current
         const element: LineElement = {
           id: nextId,
           type: 'line',
           lineStyle,
           start: draft.start,
-          end: draft.current,
+          end,
+          startAnchor: draft.startAnchor,
+          endAnchor,
           style: { stroke, strokeWidth: 2 },
         }
         void commitBoard([...board.elements, element])
@@ -228,20 +249,62 @@ function App() {
     }
 
     if (drag) {
-      void commitBoard(board.elements)
+      const dx = point.x - drag.origin.x
+      const dy = point.y - drag.origin.y
+      const finalElements = board.elements.map((element) => moveElement(element, drag, dx, dy))
+      void commitBoard(finalElements)
       setDrag(null)
     }
   }
 
-  const selectElement = (element: WhiteboardElement, event: PointerEvent<SVGGElement>) => {
+  const handleElementPointerDown = (element: WhiteboardElement, event: PointerEvent<SVGGElement>) => {
     event.stopPropagation()
+    setInlineEdit(null)
+
     if (tool === 'erase') {
       void commitBoard(board.elements.filter((candidate) => candidate.id !== element.id))
       setSelectedId(null)
       return
     }
+
+    if (tool === 'line') {
+      const point = pointFromElementEvent(event)
+      const startAnchor = element.type === 'box' ? anchorForBoxPoint(element, point) : undefined
+      startLineDraft(
+        startAnchor ? pointForAnchor(board.elements, startAnchor) : point,
+        startAnchor,
+        event.currentTarget.ownerSVGElement,
+        event.pointerId,
+      )
+      return
+    }
+
+    if (tool !== 'select') return
+
     setSelectedId(element.id)
     setDrag({ id: element.id, origin: pointFromElementEvent(event), element })
+  }
+
+  const startInlineEdit = (element: WhiteboardElement, event: MouseEvent<SVGGElement>) => {
+    event.stopPropagation()
+    setTool('select')
+    setSelectedId(element.id)
+    setDrag(null)
+    setDraft(null)
+    setInlineEdit({ id: element.id, value: editableText(element) })
+  }
+
+  const finishInlineEdit = (commit: boolean) => {
+    if (!inlineEdit) return
+    const element = board.elements.find((candidate) => candidate.id === inlineEdit.id)
+    setInlineEdit(null)
+    if (!commit || !element || editableText(element) === inlineEdit.value) return
+    const patch = element.type === 'text' ? { text: inlineEdit.value } : { label: inlineEdit.value }
+    void commitBoard(
+      board.elements.map((candidate) =>
+        candidate.id === inlineEdit.id ? ({ ...candidate, ...patch } as WhiteboardElement) : candidate,
+      ),
+    )
   }
 
   const clearBoard = async () => {
@@ -250,6 +313,7 @@ function App() {
     setBoard(result.board)
     setHistory(result.history)
     setSelectedId(null)
+    setInlineEdit(null)
   }
 
   const captureScreenshot = async () => {
@@ -311,7 +375,7 @@ function App() {
           </FormControl>
           <Divider />
           <Typography variant="overline">Selected</Typography>
-          {selected ? <Inspector element={selected} onChange={updateSelected} /> : <Typography color="text.secondary">No element selected.</Typography>}
+          {selected ? <Inspector element={selected} onCommit={commitSelectedPatch} /> : <Typography color="text.secondary">No element selected.</Typography>}
         </Paper>
 
         <Box className="board-wrap" ref={boardRef}>
@@ -330,11 +394,24 @@ function App() {
               <ElementView
                 key={element.id}
                 element={element}
+                elements={board.elements}
                 selected={element.id === selectedId}
-                onPointerDown={(event) => selectElement(element, event)}
+                editing={inlineEdit?.id === element.id}
+                onPointerDown={(event) => handleElementPointerDown(element, event)}
+                onDoubleClick={(event) => startInlineEdit(element, event)}
               />
             ))}
-            {draft && <DraftView draft={draft} stroke={stroke} boxShape={boxShape} lineStyle={lineStyle} />}
+            {inlineEdit && selected && (
+              <InlineEditor
+                element={selected}
+                elements={board.elements}
+                value={inlineEdit.value}
+                onChange={(value) => setInlineEdit({ ...inlineEdit, value })}
+                onCommit={() => finishInlineEdit(true)}
+                onCancel={() => finishInlineEdit(false)}
+              />
+            )}
+            {draft && <DraftView draft={draft} elements={board.elements} stroke={stroke} boxShape={boxShape} lineStyle={lineStyle} />}
           </svg>
         </Box>
 
@@ -360,12 +437,63 @@ function App() {
   )
 }
 
-function moveElement(element: WhiteboardElement, drag: { id: number; element: WhiteboardElement }, dx: number, dy: number): WhiteboardElement {
+function editableText(element: WhiteboardElement) {
+  return element.type === 'text' ? element.text : (element.label ?? '')
+}
+
+function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: number): WhiteboardElement {
   if (element.id !== drag.id) return element
   if (drag.element.type === 'line') {
-    return { ...drag.element, start: { x: drag.element.start.x + dx, y: drag.element.start.y + dy }, end: { x: drag.element.end.x + dx, y: drag.element.end.y + dy } }
+    const start = drag.element.startAnchor ? drag.element.start : { x: drag.element.start.x + dx, y: drag.element.start.y + dy }
+    const end = drag.element.endAnchor ? drag.element.end : { x: drag.element.end.x + dx, y: drag.element.end.y + dy }
+    return { ...drag.element, start, end }
   }
   return { ...drag.element, x: drag.element.x + dx, y: drag.element.y + dy }
+}
+
+function boxAtPoint(elements: WhiteboardElement[], point: Point): BoxElement | undefined {
+  return elements
+    .filter((element): element is BoxElement => element.type === 'box')
+    .toReversed()
+    .find((box) => point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height)
+}
+
+function anchorAtPoint(elements: WhiteboardElement[], point: Point): Anchor | undefined {
+  const box = boxAtPoint(elements, point)
+  return box ? anchorForBoxPoint(box, point) : undefined
+}
+
+function anchorForBoxPoint(box: BoxElement, point: Point): Anchor {
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const dx = (point.x - center.x) / Math.max(box.width, 1)
+  const dy = (point.y - center.y) / Math.max(box.height, 1)
+  const side: AnchorSide = Math.abs(dx) > Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
+  return { elementId: box.id, side }
+}
+
+function pointForAnchor(elements: WhiteboardElement[], anchor: Anchor): Point {
+  const box = elements.find((element): element is BoxElement => element.type === 'box' && element.id === anchor.elementId)
+  if (!box) return { x: 0, y: 0 }
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  switch (anchor.side) {
+    case 'top':
+      return { x: center.x, y: box.y }
+    case 'right':
+      return { x: box.x + box.width, y: center.y }
+    case 'bottom':
+      return { x: center.x, y: box.y + box.height }
+    case 'left':
+      return { x: box.x, y: center.y }
+    case 'center':
+      return center
+  }
+}
+
+function linePoints(line: LineElement, elements: WhiteboardElement[]) {
+  return {
+    start: line.startAnchor ? pointForAnchor(elements, line.startAnchor) : line.start,
+    end: line.endAnchor ? pointForAnchor(elements, line.endAnchor) : line.end,
+  }
 }
 
 function ToolButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: ReactNode; onClick: () => void }) {
@@ -378,67 +506,213 @@ function ToolButton({ active, label, icon, onClick }: { active: boolean; label: 
   )
 }
 
-function Inspector({ element, onChange }: { element: WhiteboardElement; onChange: (patch: Partial<WhiteboardElement>) => void }) {
+function Inspector({ element, onCommit }: { element: WhiteboardElement; onCommit: (patch: Partial<WhiteboardElement>) => void }) {
+  const [values, setValues] = useState(() => inspectorValues(element))
+
+  useEffect(() => {
+    setValues(inspectorValues(element))
+  }, [element])
+
+  const commit = (field: string) => {
+    const initial = inspectorValues(element)
+    if (values[field] === initial[field]) return
+    const rawValue = values[field]
+    const value = field === 'width' || field === 'height' ? Number(rawValue) : rawValue
+    onCommit({ [field]: value } as Partial<WhiteboardElement>)
+  }
+
+  const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return
+    event.currentTarget.blur()
+  }
+
   if (element.type === 'box') {
     return (
       <Stack spacing={1.5}>
-        <TextField label="Label" size="small" value={element.label ?? ''} onChange={(event) => onChange({ label: event.target.value })} />
-        <TextField label="Width" size="small" type="number" value={Math.round(element.width)} onChange={(event) => onChange({ width: Number(event.target.value) } as Partial<WhiteboardElement>)} />
-        <TextField label="Height" size="small" type="number" value={Math.round(element.height)} onChange={(event) => onChange({ height: Number(event.target.value) } as Partial<WhiteboardElement>)} />
+        <TextField label="Label" size="small" value={values.label} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
+        <TextField label="Width" size="small" type="number" value={values.width} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
+        <TextField label="Height" size="small" type="number" value={values.height} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
       </Stack>
     )
   }
   if (element.type === 'text') {
     return (
       <Stack spacing={1.5}>
-        <TextField label="Text" size="small" multiline minRows={3} value={element.text} onChange={(event) => onChange({ text: event.target.value } as Partial<WhiteboardElement>)} />
-        <TextField label="Width" size="small" type="number" value={Math.round(element.width)} onChange={(event) => onChange({ width: Number(event.target.value) } as Partial<WhiteboardElement>)} />
+        <TextField label="Text" size="small" multiline minRows={3} value={values.text} onChange={(event) => setValues({ ...values, text: event.target.value })} onBlur={() => commit('text')} />
+        <TextField label="Width" size="small" type="number" value={values.width} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
       </Stack>
     )
   }
   return (
     <Stack spacing={1.5}>
-      <TextField label="Label" size="small" value={element.label ?? ''} onChange={(event) => onChange({ label: event.target.value } as Partial<WhiteboardElement>)} />
-      <Typography variant="caption" color="text.secondary">Line endpoints are edited by dragging the line for now.</Typography>
+      <TextField label="Label" size="small" value={values.label} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
+      <Typography variant="caption" color="text.secondary">Double-click the line label to edit inline. Anchored endpoints follow their boxes.</Typography>
     </Stack>
   )
 }
 
-function ElementView({ element, selected, onPointerDown }: { element: WhiteboardElement; selected: boolean; onPointerDown: (event: PointerEvent<SVGGElement>) => void }) {
+function inspectorValues(element: WhiteboardElement): Record<string, string> {
+  if (element.type === 'box') {
+    return { label: element.label ?? '', width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
+  }
+  if (element.type === 'text') {
+    return { text: element.text, width: String(Math.round(element.width)) }
+  }
+  return { label: element.label ?? '' }
+}
+
+function ElementView({
+  element,
+  elements,
+  selected,
+  editing,
+  onPointerDown,
+  onDoubleClick,
+}: {
+  element: WhiteboardElement
+  elements: WhiteboardElement[]
+  selected: boolean
+  editing: boolean
+  onPointerDown: (event: PointerEvent<SVGGElement>) => void
+  onDoubleClick: (event: MouseEvent<SVGGElement>) => void
+}) {
   const stroke = element.style?.stroke ?? '#1f2937'
   const strokeWidth = element.style?.strokeWidth ?? 2
   if (element.type === 'box') {
     return (
-      <g onPointerDown={onPointerDown} className={selected ? 'element selected' : 'element'}>
+      <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
         {element.shape === 'oval' ? (
           <ellipse cx={element.x + element.width / 2} cy={element.y + element.height / 2} rx={element.width / 2} ry={element.height / 2} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
         ) : (
           <rect x={element.x} y={element.y} width={element.width} height={element.height} rx={element.shape === 'cloud' ? 22 : 4} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={element.shape === 'cloud' ? '8 5' : undefined} />
         )}
-        {element.label && <text x={element.x + element.width / 2} y={element.y + element.height / 2} textAnchor="middle" dominantBaseline="middle" fontSize="16" fill="#111827">{element.label}</text>}
+        {element.label && !editing && <text x={element.x + element.width / 2} y={element.y + element.height / 2} textAnchor="middle" dominantBaseline="middle" fontSize="16" fill="#111827">{element.label}</text>}
       </g>
     )
   }
   if (element.type === 'line') {
+    const points = linePoints(element, elements)
     return (
-      <g onPointerDown={onPointerDown} className={selected ? 'element selected' : 'element'}>
-        <line x1={element.start.x} y1={element.start.y} x2={element.end.x} y2={element.end.y} stroke={stroke} strokeWidth={strokeWidth} markerEnd={element.lineStyle === 'arrow' || element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} markerStart={element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} />
-        {element.label && <text x={(element.start.x + element.end.x) / 2} y={(element.start.y + element.end.y) / 2 - 8} textAnchor="middle" fontSize="14" fill="#111827">{element.label}</text>}
+      <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
+        <line x1={points.start.x} y1={points.start.y} x2={points.end.x} y2={points.end.y} stroke={stroke} strokeWidth={strokeWidth} markerEnd={element.lineStyle === 'arrow' || element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} markerStart={element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} />
+        {element.label && !editing && <text x={(points.start.x + points.end.x) / 2} y={(points.start.y + points.end.y) / 2 - 8} textAnchor="middle" fontSize="14" fill="#111827">{element.label}</text>}
       </g>
     )
   }
   return (
-    <g onPointerDown={onPointerDown} className={selected ? 'element selected' : 'element'}>
-      <foreignObject x={element.x} y={element.y} width={element.width} height="120">
-        <div className="text-node" style={{ color: element.style?.stroke, fontSize: element.style?.fontSize }}>{element.text}</div>
-      </foreignObject>
+    <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
+      {!editing && (
+        <foreignObject x={element.x} y={element.y} width={element.width} height="120">
+          <div className="text-node" style={{ color: element.style?.stroke, fontSize: element.style?.fontSize }}>{element.text}</div>
+        </foreignObject>
+      )}
     </g>
   )
 }
 
-function DraftView({ draft, stroke, boxShape, lineStyle }: { draft: Draft; stroke: string; boxShape: BoxElement['shape']; lineStyle: LineElement['lineStyle'] }) {
+function InlineEditor({
+  element,
+  elements,
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  element: WhiteboardElement
+  elements: WhiteboardElement[]
+  value: string
+  onChange: (value: string) => void
+  onCommit: () => void
+  onCancel: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (event.key === 'Escape') {
+      onCancel()
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      event.currentTarget.blur()
+    }
+  }
+
+  const placement = editorPlacement(element, elements)
+  const isText = element.type === 'text'
+
+  return (
+    <foreignObject x={placement.x} y={placement.y} width={placement.width} height={placement.height}>
+      {isText ? (
+        <textarea
+          ref={inputRef as RefObject<HTMLTextAreaElement>}
+          className="inline-editor textarea"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={onCommit}
+          onKeyDown={handleKeyDown}
+        />
+      ) : (
+        <input
+          ref={inputRef as RefObject<HTMLInputElement>}
+          className="inline-editor"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={onCommit}
+          onKeyDown={handleKeyDown}
+        />
+      )}
+    </foreignObject>
+  )
+}
+
+function editorPlacement(element: WhiteboardElement, elements: WhiteboardElement[]) {
+  if (element.type === 'box') {
+    return {
+      x: element.x + 12,
+      y: element.y + element.height / 2 - 18,
+      width: Math.max(72, element.width - 24),
+      height: 38,
+    }
+  }
+  if (element.type === 'line') {
+    const points = linePoints(element, elements)
+    return {
+      x: (points.start.x + points.end.x) / 2 - 90,
+      y: (points.start.y + points.end.y) / 2 - 30,
+      width: 180,
+      height: 38,
+    }
+  }
+  return {
+    x: element.x,
+    y: element.y,
+    width: element.width,
+    height: 120,
+  }
+}
+
+function DraftView({
+  draft,
+  elements,
+  stroke,
+  boxShape,
+  lineStyle,
+}: {
+  draft: Draft
+  elements: WhiteboardElement[]
+  stroke: string
+  boxShape: BoxElement['shape']
+  lineStyle: LineElement['lineStyle']
+}) {
   if (draft.tool === 'line') {
-    return <line x1={draft.start.x} y1={draft.start.y} x2={draft.current.x} y2={draft.current.y} stroke={stroke} strokeWidth="2" strokeDasharray="6 5" markerEnd={lineStyle === 'arrow' || lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} markerStart={lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} />
+    const start = draft.startAnchor ? pointForAnchor(elements, draft.startAnchor) : draft.start
+    return <line x1={start.x} y1={start.y} x2={draft.current.x} y2={draft.current.y} stroke={stroke} strokeWidth="2" strokeDasharray="6 5" markerEnd={lineStyle === 'arrow' || lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} markerStart={lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} />
   }
   const x = Math.min(draft.start.x, draft.current.x)
   const y = Math.min(draft.start.y, draft.current.y)
