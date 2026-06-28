@@ -15,11 +15,11 @@
 - [x] Add double-click inline editing for labels and floating text.
 - [x] Commit drag and text-edit interactions only when the interaction is complete.
 - [x] Add first-pass box-side anchors for line endpoints.
-- [ ] Add robust resize handles for boxes and text.
-- [ ] Add line endpoint editing.
+- [x] Add robust resize handles for boxes and text.
+- [x] Add line endpoint editing.
 - [ ] Render cloud boxes with a better cloud shape.
 - [ ] Add undo/redo.
-- [ ] Replace placeholder history descriptions with generated summaries.
+- [x] Replace placeholder history descriptions with generated summaries.
 
 ## Phase 3: AI Tool Layer
 
@@ -34,7 +34,7 @@
 - [ ] Send board JSON and browser screenshot in multimodal requests.
 - [ ] Maintain assistant conversation history.
 - [ ] Add context compaction when the history approaches the model limit.
-- [ ] Add separate summary request for history sidebar descriptions.
+- [x] Add separate summary request for history sidebar descriptions.
 
 ## Phase 5: Real-Time Experiment
 

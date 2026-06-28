@@ -69,6 +69,7 @@ type TextElement = {
   x: number
   y: number
   width: number
+  height?: number
   style?: ElementStyle
 }
 
@@ -78,6 +79,10 @@ type Tool = 'select' | 'line' | 'box' | 'text' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
 type Draft = { tool: 'line' | 'box'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
+type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw'
+type Resize = { id: number; origin: Point; element: BoxElement | TextElement; handle: ResizeHandle }
+type LineEndpoint = 'start' | 'end'
+type EndpointDrag = { id: number; endpoint: LineEndpoint; line: LineElement }
 type InlineEdit = { id: number; value: string }
 
 const defaultBoard: Board = { elements: [], updatedAt: new Date().toISOString() }
@@ -93,9 +98,13 @@ function App() {
   const [stroke, setStroke] = useState(colors[0])
   const [draft, setDraft] = useState<Draft | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
+  const [resize, setResize] = useState<Resize | null>(null)
+  const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null)
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const boardRef = useRef<HTMLDivElement | null>(null)
+  const lastCommittedBoardRef = useRef<Board>(defaultBoard)
+  const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
 
   const selected = useMemo(
     () => board.elements.find((element) => element.id === selectedId) ?? null,
@@ -108,19 +117,34 @@ function App() {
       fetch('/api/history').then((response) => response.json()),
     ]).then(([nextBoard, nextHistory]) => {
       setBoard(nextBoard)
+      lastCommittedBoardRef.current = nextBoard
       setHistory(nextHistory.history)
     })
   }, [])
 
   const commitBoard = useCallback(async (elements: WhiteboardElement[]) => {
+    const beforeBoard = lastCommittedBoardRef.current
+    const beforeScreenshot = beforeScreenshotRef.current ? await beforeScreenshotRef.current : await captureBoardScreenshot(boardRef.current)
+    beforeScreenshotRef.current = null
     const nextBoard = { elements, updatedAt: new Date().toISOString() }
     setBoard(nextBoard)
+    await nextPaint()
+    const afterScreenshot = await captureBoardScreenshot(boardRef.current)
     const response = await fetch('/api/board', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(nextBoard),
+      body: JSON.stringify({
+        ...nextBoard,
+        change: {
+          before: beforeBoard,
+          after: nextBoard,
+          beforeScreenshot,
+          afterScreenshot,
+        },
+      }),
     })
     const result = await response.json()
+    lastCommittedBoardRef.current = result.board
     setHistory(result.history)
   }, [])
 
@@ -140,6 +164,12 @@ function App() {
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
+  const pointFromOwnedSvgEvent = (event: PointerEvent<SVGElement>): Point => {
+    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
+    if (!rect) return { x: 0, y: 0 }
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  }
+
   const commitSelectedPatch = (patch: Partial<BoxElement> | Partial<LineElement> | Partial<TextElement>) => {
     if (selectedId === null) return
     void commitBoard(
@@ -150,6 +180,7 @@ function App() {
   }
 
   const startLineDraft = (point: Point, startAnchor?: Anchor, svg?: SVGSVGElement | null, pointerId?: number) => {
+    captureBeforeSnapshot()
     setSelectedId(null)
     setInlineEdit(null)
     setDraft({ tool: 'line', start: point, current: point, startAnchor })
@@ -165,6 +196,7 @@ function App() {
     setInlineEdit(null)
 
     if (tool === 'line' || tool === 'box') {
+      captureBeforeSnapshot()
       setDraft({ tool, start: point, current: point })
       event.currentTarget.setPointerCapture(event.pointerId)
     }
@@ -172,6 +204,7 @@ function App() {
     if (tool === 'text') {
       const text = window.prompt('Text')
       if (!text) return
+      captureBeforeSnapshot()
       void commitBoard([
         ...board.elements,
         {
@@ -181,6 +214,7 @@ function App() {
           x: point.x,
           y: point.y,
           width: 180,
+          height: 120,
           style: { stroke, fontSize: 18 },
         },
       ])
@@ -193,6 +227,24 @@ function App() {
     const point = pointFromSvgEvent(event)
     if (draft) {
       setDraft({ ...draft, current: point })
+      return
+    }
+
+    if (endpointDrag) {
+      setBoard((current) => ({
+        ...current,
+        elements: current.elements.map((element) => moveLineEndpoint(element, endpointDrag, point)),
+      }))
+      return
+    }
+
+    if (resize) {
+      const dx = point.x - resize.origin.x
+      const dy = point.y - resize.origin.y
+      setBoard((current) => ({
+        ...current,
+        elements: current.elements.map((element) => resizeElement(element, resize, dx, dy)),
+      }))
       return
     }
 
@@ -246,6 +298,25 @@ function App() {
       }
       setDraft(null)
       setTool('select')
+      if (width <= 8 && height <= 8) {
+        beforeScreenshotRef.current = null
+      }
+    }
+
+    if (endpointDrag) {
+      const anchor = anchorAtPoint(board.elements.filter((element) => element.id !== endpointDrag.id), point)
+      const finalPoint = anchor ? pointForAnchor(board.elements, anchor) : point
+      const finalElements = board.elements.map((element) => moveLineEndpoint(element, endpointDrag, finalPoint, anchor))
+      void commitBoard(finalElements)
+      setEndpointDrag(null)
+    }
+
+    if (resize) {
+      const dx = point.x - resize.origin.x
+      const dy = point.y - resize.origin.y
+      const finalElements = board.elements.map((element) => resizeElement(element, resize, dx, dy))
+      void commitBoard(finalElements)
+      setResize(null)
     }
 
     if (drag) {
@@ -281,24 +352,55 @@ function App() {
 
     if (tool !== 'select') return
 
+    captureBeforeSnapshot()
     setSelectedId(element.id)
     setDrag({ id: element.id, origin: pointFromElementEvent(event), element })
   }
 
   const startInlineEdit = (element: WhiteboardElement, event: MouseEvent<SVGGElement>) => {
     event.stopPropagation()
+    captureBeforeSnapshot()
     setTool('select')
     setSelectedId(element.id)
     setDrag(null)
+    setResize(null)
+    setEndpointDrag(null)
     setDraft(null)
     setInlineEdit({ id: element.id, value: editableText(element) })
+  }
+
+  const startResize = (element: BoxElement | TextElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => {
+    event.stopPropagation()
+    captureBeforeSnapshot()
+    setTool('select')
+    setSelectedId(element.id)
+    setInlineEdit(null)
+    setDrag(null)
+    setEndpointDrag(null)
+    setResize({ id: element.id, origin: pointFromOwnedSvgEvent(event), element, handle })
+    event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId)
+  }
+
+  const startEndpointDrag = (line: LineElement, endpoint: LineEndpoint, event: PointerEvent<SVGCircleElement>) => {
+    event.stopPropagation()
+    captureBeforeSnapshot()
+    setTool('select')
+    setSelectedId(line.id)
+    setInlineEdit(null)
+    setDrag(null)
+    setResize(null)
+    setEndpointDrag({ id: line.id, endpoint, line })
+    event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId)
   }
 
   const finishInlineEdit = (commit: boolean) => {
     if (!inlineEdit) return
     const element = board.elements.find((candidate) => candidate.id === inlineEdit.id)
     setInlineEdit(null)
-    if (!commit || !element || editableText(element) === inlineEdit.value) return
+    if (!commit || !element || editableText(element) === inlineEdit.value) {
+      beforeScreenshotRef.current = null
+      return
+    }
     const patch = element.type === 'text' ? { text: inlineEdit.value } : { label: inlineEdit.value }
     void commitBoard(
       board.elements.map((candidate) =>
@@ -314,12 +416,17 @@ function App() {
     setHistory(result.history)
     setSelectedId(null)
     setInlineEdit(null)
+    lastCommittedBoardRef.current = result.board
+    beforeScreenshotRef.current = null
   }
 
   const captureScreenshot = async () => {
     if (!boardRef.current) return
-    const canvas = await html2canvas(boardRef.current, { backgroundColor: '#f8fafc' })
-    setScreenshot(canvas.toDataURL('image/png'))
+    setScreenshot(await captureBoardScreenshot(boardRef.current))
+  }
+
+  const captureBeforeSnapshot = () => {
+    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
   }
 
   return (
@@ -375,7 +482,7 @@ function App() {
           </FormControl>
           <Divider />
           <Typography variant="overline">Selected</Typography>
-          {selected ? <Inspector element={selected} onCommit={commitSelectedPatch} /> : <Typography color="text.secondary">No element selected.</Typography>}
+          {selected ? <Inspector element={selected} onBeginEdit={captureBeforeSnapshot} onCommit={commitSelectedPatch} /> : <Typography color="text.secondary">No element selected.</Typography>}
         </Paper>
 
         <Box className="board-wrap" ref={boardRef}>
@@ -401,6 +508,12 @@ function App() {
                 onDoubleClick={(event) => startInlineEdit(element, event)}
               />
             ))}
+            {selected && !inlineEdit && (selected.type === 'box' || selected.type === 'text') && (
+              <ResizeHandles element={selected} onPointerDown={startResize} />
+            )}
+            {selected && !inlineEdit && selected.type === 'line' && (
+              <LineEndpointHandles line={selected} elements={board.elements} onPointerDown={startEndpointDrag} />
+            )}
             {inlineEdit && selected && (
               <InlineEditor
                 element={selected}
@@ -441,6 +554,18 @@ function editableText(element: WhiteboardElement) {
   return element.type === 'text' ? element.text : (element.label ?? '')
 }
 
+async function captureBoardScreenshot(element: HTMLElement | null) {
+  if (!element) return null
+  const canvas = await html2canvas(element, { backgroundColor: '#f8fafc', scale: 0.6 })
+  return canvas.toDataURL('image/png')
+}
+
+function nextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
 function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: number): WhiteboardElement {
   if (element.id !== drag.id) return element
   if (drag.element.type === 'line') {
@@ -449,6 +574,59 @@ function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: num
     return { ...drag.element, start, end }
   }
   return { ...drag.element, x: drag.element.x + dx, y: drag.element.y + dy }
+}
+
+function moveLineEndpoint(element: WhiteboardElement, endpointDrag: EndpointDrag, point: Point, anchor?: Anchor): WhiteboardElement {
+  if (element.id !== endpointDrag.id || element.type !== 'line') return element
+  if (endpointDrag.endpoint === 'start') {
+    return { ...endpointDrag.line, start: point, startAnchor: anchor, end: element.end, endAnchor: element.endAnchor }
+  }
+  return { ...endpointDrag.line, end: point, endAnchor: anchor, start: element.start, startAnchor: element.startAnchor }
+}
+
+function resizeElement(element: WhiteboardElement, resize: Resize, dx: number, dy: number): WhiteboardElement {
+  if (element.id !== resize.id) return element
+
+  const minWidth = element.type === 'text' ? 96 : 64
+  const minHeight = 44
+  const original = resize.element
+  let x = original.x
+  let y = original.y
+  let width = original.width
+  let height = elementHeight(original)
+
+  if (resize.handle.includes('e')) {
+    width = Math.max(minWidth, original.width + dx)
+  }
+  if (resize.handle.includes('s')) {
+    height = Math.max(minHeight, elementHeight(original) + dy)
+  }
+  if (resize.handle.includes('w')) {
+    const nextWidth = Math.max(minWidth, original.width - dx)
+    x = original.x + original.width - nextWidth
+    width = nextWidth
+  }
+  if (resize.handle.includes('n')) {
+    const nextHeight = Math.max(minHeight, elementHeight(original) - dy)
+    y = original.y + elementHeight(original) - nextHeight
+    height = nextHeight
+  }
+
+  return { ...original, x, y, width, height }
+}
+
+function elementHeight(element: BoxElement | TextElement) {
+  return element.type === 'text' ? (element.height ?? 120) : element.height
+}
+
+function resizeHandlePoints(element: BoxElement | TextElement): Array<{ handle: ResizeHandle; x: number; y: number }> {
+  const height = elementHeight(element)
+  return [
+    { handle: 'nw', x: element.x, y: element.y },
+    { handle: 'ne', x: element.x + element.width, y: element.y },
+    { handle: 'se', x: element.x + element.width, y: element.y + height },
+    { handle: 'sw', x: element.x, y: element.y + height },
+  ]
 }
 
 function boxAtPoint(elements: WhiteboardElement[], point: Point): BoxElement | undefined {
@@ -506,7 +684,15 @@ function ToolButton({ active, label, icon, onClick }: { active: boolean; label: 
   )
 }
 
-function Inspector({ element, onCommit }: { element: WhiteboardElement; onCommit: (patch: Partial<WhiteboardElement>) => void }) {
+function Inspector({
+  element,
+  onBeginEdit,
+  onCommit,
+}: {
+  element: WhiteboardElement
+  onBeginEdit: () => void
+  onCommit: (patch: Partial<WhiteboardElement>) => void
+}) {
   const [values, setValues] = useState(() => inspectorValues(element))
 
   useEffect(() => {
@@ -529,23 +715,24 @@ function Inspector({ element, onCommit }: { element: WhiteboardElement; onCommit
   if (element.type === 'box') {
     return (
       <Stack spacing={1.5}>
-        <TextField label="Label" size="small" value={values.label} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
-        <TextField label="Width" size="small" type="number" value={values.width} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
-        <TextField label="Height" size="small" type="number" value={values.height} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
+        <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
+        <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
+        <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
       </Stack>
     )
   }
   if (element.type === 'text') {
     return (
       <Stack spacing={1.5}>
-        <TextField label="Text" size="small" multiline minRows={3} value={values.text} onChange={(event) => setValues({ ...values, text: event.target.value })} onBlur={() => commit('text')} />
-        <TextField label="Width" size="small" type="number" value={values.width} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
+        <TextField label="Text" size="small" multiline minRows={3} value={values.text} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, text: event.target.value })} onBlur={() => commit('text')} />
+        <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
+        <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
       </Stack>
     )
   }
   return (
     <Stack spacing={1.5}>
-      <TextField label="Label" size="small" value={values.label} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
+      <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
       <Typography variant="caption" color="text.secondary">Double-click the line label to edit inline. Anchored endpoints follow their boxes.</Typography>
     </Stack>
   )
@@ -556,7 +743,7 @@ function inspectorValues(element: WhiteboardElement): Record<string, string> {
     return { label: element.label ?? '', width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
   }
   if (element.type === 'text') {
-    return { text: element.text, width: String(Math.round(element.width)) }
+    return { text: element.text, width: String(Math.round(element.width)), height: String(Math.round(elementHeight(element))) }
   }
   return { label: element.label ?? '' }
 }
@@ -586,7 +773,7 @@ function ElementView({
         ) : (
           <rect x={element.x} y={element.y} width={element.width} height={element.height} rx={element.shape === 'cloud' ? 22 : 4} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={element.shape === 'cloud' ? '8 5' : undefined} />
         )}
-        {element.label && !editing && <text x={element.x + element.width / 2} y={element.y + element.height / 2} textAnchor="middle" dominantBaseline="middle" fontSize="16" fill="#111827">{element.label}</text>}
+        {element.label && !editing && <WrappedBoxLabel box={element} />}
       </g>
     )
   }
@@ -602,10 +789,61 @@ function ElementView({
   return (
     <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
       {!editing && (
-        <foreignObject x={element.x} y={element.y} width={element.width} height="120">
+        <foreignObject className="text-foreign-object" x={element.x} y={element.y} width={element.width} height={elementHeight(element)}>
           <div className="text-node" style={{ color: element.style?.stroke, fontSize: element.style?.fontSize }}>{element.text}</div>
         </foreignObject>
       )}
+    </g>
+  )
+}
+
+function WrappedBoxLabel({ box }: { box: BoxElement }) {
+  return (
+    <foreignObject x={box.x + 10} y={box.y + 10} width={Math.max(1, box.width - 20)} height={Math.max(1, box.height - 20)} className="label-foreign-object">
+      <div className="box-label">{box.label}</div>
+    </foreignObject>
+  )
+}
+
+function ResizeHandles({
+  element,
+  onPointerDown,
+}: {
+  element: BoxElement | TextElement
+  onPointerDown: (element: BoxElement | TextElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => void
+}) {
+  return (
+    <g className="resize-handles">
+      {resizeHandlePoints(element).map((point) => (
+        <rect
+          key={point.handle}
+          className={`resize-handle ${point.handle}`}
+          x={point.x - 5}
+          y={point.y - 5}
+          width="10"
+          height="10"
+          rx="2"
+          onPointerDown={(event) => onPointerDown(element, point.handle, event)}
+        />
+      ))}
+    </g>
+  )
+}
+
+function LineEndpointHandles({
+  line,
+  elements,
+  onPointerDown,
+}: {
+  line: LineElement
+  elements: WhiteboardElement[]
+  onPointerDown: (line: LineElement, endpoint: LineEndpoint, event: PointerEvent<SVGCircleElement>) => void
+}) {
+  const points = linePoints(line, elements)
+  return (
+    <g className="line-endpoint-handles">
+      <circle className="line-endpoint-handle" cx={points.start.x} cy={points.start.y} r="7" onPointerDown={(event) => onPointerDown(line, 'start', event)} />
+      <circle className="line-endpoint-handle" cx={points.end.x} cy={points.end.y} r="7" onPointerDown={(event) => onPointerDown(line, 'end', event)} />
     </g>
   )
 }
@@ -626,6 +864,7 @@ function InlineEditor({
   onCancel: () => void
 }) {
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  const isMultiline = element.type !== 'line'
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -637,18 +876,17 @@ function InlineEditor({
       onCancel()
       return
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (!isMultiline && event.key === 'Enter') {
       event.preventDefault()
       event.currentTarget.blur()
     }
   }
 
   const placement = editorPlacement(element, elements)
-  const isText = element.type === 'text'
 
   return (
     <foreignObject x={placement.x} y={placement.y} width={placement.width} height={placement.height}>
-      {isText ? (
+      {isMultiline ? (
         <textarea
           ref={inputRef as RefObject<HTMLTextAreaElement>}
           className="inline-editor textarea"
@@ -675,9 +913,9 @@ function editorPlacement(element: WhiteboardElement, elements: WhiteboardElement
   if (element.type === 'box') {
     return {
       x: element.x + 12,
-      y: element.y + element.height / 2 - 18,
+      y: element.y + 12,
       width: Math.max(72, element.width - 24),
-      height: 38,
+      height: Math.max(38, element.height - 24),
     }
   }
   if (element.type === 'line') {
@@ -693,7 +931,7 @@ function editorPlacement(element: WhiteboardElement, elements: WhiteboardElement
     x: element.x,
     y: element.y,
     width: element.width,
-    height: 120,
+    height: elementHeight(element),
   }
 }
 

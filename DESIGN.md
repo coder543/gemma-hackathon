@@ -46,6 +46,7 @@ Supported element types:
 - `text`: floating editable text object.
 
 Anchors override positional information for the anchored endpoint. Free endpoints keep absolute coordinates.
+Boxes and floating text are resizable. Box labels and floating text wrap within their visible bounds.
 
 ## Architecture
 
@@ -86,6 +87,19 @@ The first implementation includes:
 - Double-click inline editing for box labels, line labels, and floating text.
 - Box-side anchoring when drawing lines from or to boxes.
 - Local drag/edit previews with backend commits only when the interaction is complete.
+- Resizable boxes and floating text objects.
+- Independent line endpoint dragging, including anchoring by dropping an endpoint on a box edge.
 - In-memory backend persistence.
-- History list with placeholder commit descriptions.
+- History list with AI-generated 2 to 5 word commit descriptions.
 - JSON state preview and screenshot capture.
+
+## History Summary Request
+
+Each committed board edit sends the backend:
+
+- Serialized board state before the edit.
+- Serialized board state after the edit.
+- Browser screenshot before the edit.
+- Browser screenshot after the edit.
+
+The backend asks `gemma-4-31b` through Cerebras for a 2 to 5 word change description. If the model request fails, the app falls back to a deterministic short label so whiteboard commits still succeed.
