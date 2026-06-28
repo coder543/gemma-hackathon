@@ -96,6 +96,8 @@ type Board = z.infer<typeof boardSchema>;
 type CommitContext = z.infer<typeof commitSchema>['change'];
 type WhiteboardElement = z.infer<typeof elementSchema>;
 type BoxElement = z.infer<typeof boxSchema>;
+type ImageElement = z.infer<typeof imageSchema>;
+type AnchorableElement = BoxElement | ImageElement;
 type SvgAttempt = z.infer<typeof svgAttemptSchema>;
 
 const createBoxArgsSchema = boxSchema.omit({ id: true, type: true });
@@ -601,24 +603,28 @@ function nextElementId(elements: WhiteboardElement[]) {
 }
 
 function pointForAnchor(elements: WhiteboardElement[], anchor: z.infer<typeof anchorSchema>) {
-  const box = elements.find((element): element is BoxElement => element.type === 'box' && element.id === anchor.elementId);
-  if (!box) {
+  const element = elements.find((candidate): candidate is AnchorableElement => isAnchorableElement(candidate) && candidate.id === anchor.elementId);
+  if (!element) {
     throw new Error(`Anchor target ${anchor.elementId} does not exist`);
   }
 
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
   switch (anchor.side) {
     case 'top':
-      return { x: center.x, y: box.y };
+      return { x: center.x, y: element.y };
     case 'right':
-      return { x: box.x + box.width, y: center.y };
+      return { x: element.x + element.width, y: center.y };
     case 'bottom':
-      return { x: center.x, y: box.y + box.height };
+      return { x: center.x, y: element.y + element.height };
     case 'left':
-      return { x: box.x, y: center.y };
+      return { x: element.x, y: center.y };
     case 'center':
       return center;
   }
+}
+
+function isAnchorableElement(element: WhiteboardElement): element is AnchorableElement {
+  return element.type === 'box' || element.type === 'image';
 }
 
 function graphDiff(before: WhiteboardElement[], after: WhiteboardElement[]) {
@@ -671,7 +677,7 @@ const toolDefinitions = [
     type: 'function',
     function: {
       name: 'create_line',
-      description: 'Create a line, arrow, or double arrow, optionally anchored to boxes.',
+      description: 'Create a line, arrow, or double arrow, optionally anchored to boxes or image boxes.',
       parameters: {
         type: 'object',
         properties: {
@@ -765,7 +771,7 @@ const toolDefinitions = [
     type: 'function',
     function: {
       name: 'anchor_line_endpoint',
-      description: 'Anchor or unanchor one endpoint of a line.',
+      description: 'Anchor or unanchor one endpoint of a line to a box or image box.',
       parameters: {
         type: 'object',
         properties: {

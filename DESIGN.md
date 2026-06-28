@@ -42,11 +42,11 @@ The board state is an array of objects. Every element has a numeric `id` and a `
 Supported element types:
 
 - `box`: `rectangle`, `oval`, or `cloud`; may have a text `label`.
-- `line`: `plain`, `arrow`, or `doubleArrow`; may be anchored to box sides.
+- `line`: `plain`, `arrow`, or `doubleArrow`; may be anchored to box or image-box sides.
 - `text`: floating editable text object.
 - `image`: AI-generated SVG image box with a user `description`, generated `svg`, and render-attempt history.
 
-Anchors override positional information for the anchored endpoint. Free endpoints keep absolute coordinates.
+Anchors override positional information for the anchored endpoint. Free endpoints keep absolute coordinates. Boxes and image boxes are anchor targets. When the user draws or drags a line endpoint, side targets appear and the endpoint snaps to the nearest target within a short distance.
 Boxes, floating text, and image boxes are resizable. Box labels and floating text wrap within their visible bounds.
 
 ## Architecture
@@ -108,10 +108,10 @@ The first implementation includes:
 - Draw box, line, and text.
 - Select, drag, inspect, edit, erase, and clear.
 - Double-click inline editing for box labels, line labels, and floating text.
-- Box-side anchoring when drawing lines from or to boxes.
+- Side anchoring when drawing lines from or to boxes and image boxes.
 - Local drag/edit previews with backend commits only when the interaction is complete.
 - Resizable boxes and floating text objects.
-- Independent line endpoint dragging, including anchoring by dropping an endpoint on a box edge.
+- Independent line endpoint dragging, including anchoring by dropping an endpoint on a box or image edge.
 - Undo and redo for committed board states.
 - Cloud boxes rendered as cloud-shaped paths.
 - AI-generated SVG image boxes with automatic render-failure repair.

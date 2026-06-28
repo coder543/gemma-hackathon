@@ -108,6 +108,7 @@ type InlineEdit = { id: number; value: string }
 
 const defaultBoard: Board = { elements: [], updatedAt: new Date().toISOString() }
 const colors = ['#1f2937', '#2563eb', '#e11d48', '#16a34a', '#f59e0b']
+const anchorSnapDistance = 28
 
 function App() {
   const [board, setBoard] = useState<Board>(defaultBoard)
@@ -399,7 +400,7 @@ function App() {
 
     if (tool === 'line') {
       const point = pointFromElementEvent(event)
-      const startAnchor = element.type === 'box' ? anchorForBoxPoint(element, point) : undefined
+      const startAnchor = isAnchorableElement(element) ? anchorForElementPoint(element, point) : undefined
       startLineDraft(
         startAnchor ? pointForAnchor(board.elements, startAnchor) : point,
         startAnchor,
@@ -708,6 +709,9 @@ function App() {
             {selected && !inlineEdit && selected.type === 'line' && (
               <LineEndpointHandles line={selected} elements={board.elements} onPointerDown={startEndpointDrag} />
             )}
+            {(draft?.tool === 'line' || endpointDrag) && (
+              <AnchorTargets elements={board.elements} activeAnchor={anchorAtPoint(board.elements.filter((element) => element.id !== endpointDrag?.id), draft?.current ?? pointForEndpointDrag(endpointDrag, board.elements))} />
+            )}
             {inlineEdit && selected && (
               <InlineEditor
                 element={selected}
@@ -893,39 +897,62 @@ function resizeHandlePoints(element: BoxElement | TextElement | ImageElement): A
   ]
 }
 
-function boxAtPoint(elements: WhiteboardElement[], point: Point): BoxElement | undefined {
-  return elements
-    .filter((element): element is BoxElement => element.type === 'box')
-    .toReversed()
-    .find((box) => point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height)
+type AnchorableElement = BoxElement | ImageElement
+
+function isAnchorableElement(element: WhiteboardElement): element is AnchorableElement {
+  return element.type === 'box' || element.type === 'image'
+}
+
+function anchorableElements(elements: WhiteboardElement[]) {
+  return elements.filter(isAnchorableElement)
 }
 
 function anchorAtPoint(elements: WhiteboardElement[], point: Point): Anchor | undefined {
-  const box = boxAtPoint(elements, point)
-  return box ? anchorForBoxPoint(box, point) : undefined
+  let nearest: { anchor: Anchor; distance: number } | null = null
+
+  for (const element of anchorableElements(elements)) {
+    for (const anchor of anchorsForElement(element)) {
+      const anchorPoint = pointForAnchor(elements, anchor)
+      const distance = Math.hypot(anchorPoint.x - point.x, anchorPoint.y - point.y)
+      if (distance <= anchorSnapDistance && (!nearest || distance < nearest.distance)) {
+        nearest = { anchor, distance }
+      }
+    }
+  }
+
+  return nearest?.anchor
 }
 
-function anchorForBoxPoint(box: BoxElement, point: Point): Anchor {
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-  const dx = (point.x - center.x) / Math.max(box.width, 1)
-  const dy = (point.y - center.y) / Math.max(box.height, 1)
+function anchorForElementPoint(element: AnchorableElement, point: Point): Anchor {
+  const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 }
+  const dx = (point.x - center.x) / Math.max(element.width, 1)
+  const dy = (point.y - center.y) / Math.max(element.height, 1)
   const side: AnchorSide = Math.abs(dx) > Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')
-  return { elementId: box.id, side }
+  return { elementId: element.id, side }
+}
+
+function anchorsForElement(element: AnchorableElement): Anchor[] {
+  return [
+    { elementId: element.id, side: 'top' },
+    { elementId: element.id, side: 'right' },
+    { elementId: element.id, side: 'bottom' },
+    { elementId: element.id, side: 'left' },
+  ]
 }
 
 function pointForAnchor(elements: WhiteboardElement[], anchor: Anchor): Point {
-  const box = elements.find((element): element is BoxElement => element.type === 'box' && element.id === anchor.elementId)
-  if (!box) return { x: 0, y: 0 }
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const element = elements.find((candidate): candidate is AnchorableElement => isAnchorableElement(candidate) && candidate.id === anchor.elementId)
+  if (!element) return { x: 0, y: 0 }
+  const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 }
   switch (anchor.side) {
     case 'top':
-      return { x: center.x, y: box.y }
+      return { x: center.x, y: element.y }
     case 'right':
-      return { x: box.x + box.width, y: center.y }
+      return { x: element.x + element.width, y: center.y }
     case 'bottom':
-      return { x: center.x, y: box.y + box.height }
+      return { x: center.x, y: element.y + element.height }
     case 'left':
-      return { x: box.x, y: center.y }
+      return { x: element.x, y: center.y }
     case 'center':
       return center
   }
@@ -936,6 +963,13 @@ function linePoints(line: LineElement, elements: WhiteboardElement[]) {
     start: line.startAnchor ? pointForAnchor(elements, line.startAnchor) : line.start,
     end: line.endAnchor ? pointForAnchor(elements, line.endAnchor) : line.end,
   }
+}
+
+function pointForEndpointDrag(endpointDrag: EndpointDrag | null, elements: WhiteboardElement[]) {
+  if (!endpointDrag) return { x: -9999, y: -9999 }
+  const line = elements.find((element): element is LineElement => element.type === 'line' && element.id === endpointDrag.id) ?? endpointDrag.line
+  const points = linePoints(line, elements)
+  return endpointDrag.endpoint === 'start' ? points.start : points.end
 }
 
 function ToolButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: ReactNode; onClick: () => void }) {
@@ -1180,6 +1214,32 @@ function LineEndpointHandles({
     <g className="line-endpoint-handles">
       <circle className="line-endpoint-handle" cx={points.start.x} cy={points.start.y} r="7" onPointerDown={(event) => onPointerDown(line, 'start', event)} />
       <circle className="line-endpoint-handle" cx={points.end.x} cy={points.end.y} r="7" onPointerDown={(event) => onPointerDown(line, 'end', event)} />
+    </g>
+  )
+}
+
+function AnchorTargets({ elements, activeAnchor }: { elements: WhiteboardElement[]; activeAnchor?: Anchor }) {
+  const targets = anchorableElements(elements).flatMap((element) =>
+    anchorsForElement(element).map((anchor) => ({
+      anchor,
+      point: pointForAnchor(elements, anchor),
+    })),
+  )
+
+  return (
+    <g className="anchor-targets">
+      {targets.map((target) => {
+        const active = activeAnchor?.elementId === target.anchor.elementId && activeAnchor.side === target.anchor.side
+        return (
+          <circle
+            key={`${target.anchor.elementId}-${target.anchor.side}`}
+            className={active ? 'anchor-target active' : 'anchor-target'}
+            cx={target.point.x}
+            cy={target.point.y}
+            r={active ? 7 : 5}
+          />
+        )
+      })}
     </g>
   )
 }

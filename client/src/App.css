@@ -181,6 +181,21 @@
   cursor: crosshair;
 }
 
+.anchor-target {
+  fill: #ffffff;
+  stroke: #16a34a;
+  stroke-width: 2;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.anchor-target.active {
+  fill: #bbf7d0;
+  stroke: #15803d;
+  stroke-width: 3;
+  opacity: 1;
+}
+
 .history-list {
   max-height: 230px;
   overflow: auto;

@@ -15,6 +15,8 @@
 - [x] Add double-click inline editing for labels and floating text.
 - [x] Commit drag and text-edit interactions only when the interaction is complete.
 - [x] Add first-pass box-side anchors for line endpoints.
+- [x] Support anchoring line endpoints to image boxes.
+- [x] Show proximity anchor targets while drawing or dragging line endpoints.
 - [x] Add robust resize handles for boxes and text.
 - [x] Add line endpoint editing.
 - [x] Render cloud boxes with a better cloud shape.
