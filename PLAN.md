@@ -24,28 +24,30 @@
 ## Phase 3: AI Tool Layer
 
 - [x] Define server-side tool schemas for board mutations.
-- [x] Expose create/update/delete/clear/anchor tools to the assistant loop.
+- [x] Expose create/update/delete/clear/anchor tools for interactive AI flows.
 - [x] Validate every tool call against the same board schema used by the UI.
 - [x] Return normalized graph diffs for history and debugging.
 
-## Phase 4: Cerebras Integration
+## Phase 4: Interactive AI Use Cases
 
-- [ ] Implement Cerebras proxy endpoint using `CEREBRAS_API_KEY`.
-- [ ] Send board JSON and browser screenshot in multimodal requests.
+- [x] Implement Cerebras-backed history summary requests using `CEREBRAS_API_KEY`.
+- [x] Add separate summary request for history sidebar descriptions.
+- [x] Add AI-generated SVG image boxes from user descriptions.
+- [x] Encourage animated SVG output for generated image boxes.
+- [x] Detect SVG render failures and automatically ask the model to repair using previous render-attempt history.
+- [ ] Add regenerate/refine controls for AI image boxes.
+- [ ] Add more focused interactive AI commands for selected board elements.
+
+## Deferred: Assistant Loop
+
+- [ ] Implement `/api/ai/turn` assistant loop only after interactive use cases justify it.
+- [ ] Send board JSON and browser screenshot in assistant-loop multimodal requests.
 - [ ] Maintain assistant conversation history.
 - [ ] Add context compaction when the history approaches the model limit.
-- [x] Add separate summary request for history sidebar descriptions.
-
-## Phase 5: Real-Time Experiment
-
-- [ ] Implement continuous mode.
-- [ ] Implement change-triggered mode.
-- [ ] Measure effective model loop rate and UI latency.
-- [ ] Decide which interaction model creates better collaboration.
-- [ ] Add visible AI status, latest action, and pause/resume controls.
+- [ ] Revisit continuous mode versus change-triggered mode later.
 
 ## Notes
 
 - Current persistence is in-memory and will reset when the server restarts.
-- The current `/api/ai/turn` endpoint is a placeholder.
-- History descriptions are deterministic placeholders until the summary request is implemented.
+- The current `/api/ai/turn` endpoint is intentionally deferred.
+- Live API smoke tests should not mutate the active in-memory board unless they clean up after themselves.

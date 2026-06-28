@@ -58,7 +58,24 @@ const textSchema = z.object({
   style: styleSchema.optional(),
 });
 
-const elementSchema = z.discriminatedUnion('type', [boxSchema, lineSchema, textSchema]);
+const svgAttemptSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string(),
+});
+
+const imageSchema = z.object({
+  id: z.number(),
+  type: z.literal('image'),
+  description: z.string(),
+  svg: z.string(),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  renderAttempts: z.array(svgAttemptSchema).optional(),
+});
+
+const elementSchema = z.discriminatedUnion('type', [boxSchema, lineSchema, textSchema, imageSchema]);
 const boardSchema = z.object({
   elements: z.array(elementSchema),
   updatedAt: z.string(),
@@ -79,10 +96,12 @@ type Board = z.infer<typeof boardSchema>;
 type CommitContext = z.infer<typeof commitSchema>['change'];
 type WhiteboardElement = z.infer<typeof elementSchema>;
 type BoxElement = z.infer<typeof boxSchema>;
+type SvgAttempt = z.infer<typeof svgAttemptSchema>;
 
 const createBoxArgsSchema = boxSchema.omit({ id: true, type: true });
 const createLineArgsSchema = lineSchema.omit({ id: true, type: true });
 const createTextArgsSchema = textSchema.omit({ id: true, type: true });
+const createImageArgsSchema = imageSchema.omit({ id: true, type: true });
 const updateElementArgsSchema = z.object({
   id: z.number(),
   patch: z.record(z.string(), z.unknown()),
@@ -98,11 +117,23 @@ const toolCallSchema = z.discriminatedUnion('name', [
   z.object({ name: z.literal('create_box'), args: createBoxArgsSchema }),
   z.object({ name: z.literal('create_line'), args: createLineArgsSchema }),
   z.object({ name: z.literal('create_text'), args: createTextArgsSchema }),
+  z.object({ name: z.literal('create_image'), args: createImageArgsSchema }),
   z.object({ name: z.literal('update_element'), args: updateElementArgsSchema }),
   z.object({ name: z.literal('delete_element'), args: deleteElementArgsSchema }),
   z.object({ name: z.literal('clear_board'), args: z.object({}) }),
   z.object({ name: z.literal('anchor_line_endpoint'), args: anchorLineEndpointArgsSchema }),
 ]);
+
+const generateImageSvgSchema = z.object({
+  description: z.string().min(1),
+});
+
+const repairImageSvgSchema = z.object({
+  description: z.string().min(1),
+  svg: z.string(),
+  error: z.string(),
+  renderAttempts: z.array(svgAttemptSchema).optional(),
+});
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -181,6 +212,30 @@ app.post('/api/board/clear', (_request, response) => {
 
 app.get('/api/history', (_request, response) => {
   response.json({ history });
+});
+
+app.post('/api/ai/image-svg', async (request, response) => {
+  const parsed = generateImageSvgSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid image description', details: parsed.error.flatten() });
+    return;
+  }
+
+  const result = await generateImageSvg(parsed.data.description);
+  response.json(result);
+});
+
+app.post('/api/ai/image-svg/repair', async (request, response) => {
+  const parsed = repairImageSvgSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid SVG repair payload', details: parsed.error.flatten() });
+    return;
+  }
+
+  const result = await repairImageSvg(parsed.data);
+  response.json(result);
 });
 
 app.get('/api/tools', (_request, response) => {
@@ -340,6 +395,127 @@ function fallbackChangeDescription(change: CommitContext, currentBoard: Board) {
   return 'Updated whiteboard';
 }
 
+async function generateImageSvg(description: string) {
+  const attempts: SvgAttempt[] = [
+    {
+      role: 'user' as const,
+      content: imageSvgPrompt(description),
+    },
+  ];
+
+  const svg = process.env.CEREBRAS_API_KEY
+    ? await requestSvgFromCerebras(attempts)
+    : fallbackSvg(description);
+
+  attempts.push({ role: 'assistant' as const, content: svg });
+  return { svg, renderAttempts: attempts };
+}
+
+async function repairImageSvg(payload: z.infer<typeof repairImageSvgSchema>) {
+  const attempts: SvgAttempt[] = [
+    ...(payload.renderAttempts ?? []),
+    {
+      role: 'user' as const,
+      content: `The previous SVG failed to render.\n\nBrowser/render error:\n${payload.error}\n\nBroken SVG:\n${payload.svg}\n\nReturn a corrected standalone SVG only. Preserve the requested image: ${payload.description}`,
+    },
+  ];
+
+  const svg = process.env.CEREBRAS_API_KEY
+    ? await requestSvgFromCerebras(attempts)
+    : fallbackSvg(payload.description);
+
+  attempts.push({ role: 'assistant' as const, content: svg });
+  return { svg, renderAttempts: attempts };
+}
+
+async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
+  try {
+    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gemma-4-31b',
+        temperature: 0.7,
+        max_tokens: 2400,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You create compact standalone SVG illustrations for a whiteboard app. Return only raw SVG markup. No markdown fences, explanations, external assets, scripts, or event handlers. You may include inline CSS and native SVG/SMIL animations when useful.',
+          },
+          ...attempts.map((attempt) => ({
+            role: attempt.role,
+            content: attempt.content,
+          })),
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cerebras request failed with ${response.status}`);
+    }
+
+    const result = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return cleanSvgMarkup(result.choices?.[0]?.message?.content ?? '');
+  } catch (error) {
+    console.warn('SVG generation request failed:', error);
+    return fallbackSvg('Generated image');
+  }
+}
+
+function imageSvgPrompt(description: string) {
+  return `Create an expressive SVG image for this whiteboard image box: ${description}
+
+Requirements:
+- Return only a single complete <svg>...</svg> document.
+- Include viewBox, width, and height.
+- Prefer clean vector shapes and readable composition.
+- Add subtle animation with SVG animate/animateTransform or inline CSS animation when it improves the result.
+- Do not use JavaScript, external references, remote images, or markdown fences.`;
+}
+
+function cleanSvgMarkup(markup: string) {
+  const withoutFences = markup
+    .trim()
+    .replace(/^```(?:svg)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const start = withoutFences.indexOf('<svg');
+  const end = withoutFences.lastIndexOf('</svg>');
+  if (start === -1 || end === -1) {
+    return fallbackSvg('Generated image');
+  }
+  return withoutFences.slice(start, end + '</svg>'.length);
+}
+
+function fallbackSvg(description: string) {
+  const escaped = escapeXml(description).slice(0, 120);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+  <style>
+    @keyframes pulse { 0%, 100% { opacity: .72; transform: scale(1); } 50% { opacity: 1; transform: scale(1.04); } }
+    .orb { transform-origin: 160px 96px; animation: pulse 2.4s ease-in-out infinite; }
+  </style>
+  <rect width="320" height="220" rx="18" fill="#f8fafc"/>
+  <circle class="orb" cx="160" cy="92" r="54" fill="#bfdbfe" stroke="#2563eb" stroke-width="4"/>
+  <path d="M114 150c24-18 68-18 92 0" fill="none" stroke="#16a34a" stroke-width="10" stroke-linecap="round"/>
+  <text x="160" y="192" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-size="16" fill="#111827">${escaped}</text>
+</svg>`;
+}
+
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof toolCallSchema>) {
   switch (toolCall.name) {
     case 'create_box':
@@ -348,6 +524,8 @@ function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof t
       return [...elements, { id: nextElementId(elements), type: 'line' as const, ...toolCall.args }];
     case 'create_text':
       return [...elements, { id: nextElementId(elements), type: 'text' as const, ...toolCall.args }];
+    case 'create_image':
+      return [...elements, { id: nextElementId(elements), type: 'image' as const, ...toolCall.args }];
     case 'update_element':
       return elements.map((element) => {
         if (element.id !== toolCall.args.id) return element;
@@ -488,6 +666,26 @@ const toolDefinitions = [
           style: { type: 'object' },
         },
         required: ['text', 'x', 'y', 'width'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_image',
+      description: 'Create an AI-generated SVG image box from a description.',
+      parameters: {
+        type: 'object',
+        properties: {
+          description: { type: 'string' },
+          svg: { type: 'string' },
+          x: { type: 'number' },
+          y: { type: 'number' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          renderAttempts: { type: 'array', items: { type: 'object' } },
+        },
+        required: ['description', 'svg', 'x', 'y', 'width', 'height'],
       },
     },
   },

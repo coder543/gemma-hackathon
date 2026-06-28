@@ -44,9 +44,10 @@ Supported element types:
 - `box`: `rectangle`, `oval`, or `cloud`; may have a text `label`.
 - `line`: `plain`, `arrow`, or `doubleArrow`; may be anchored to box sides.
 - `text`: floating editable text object.
+- `image`: AI-generated SVG image box with a user `description`, generated `svg`, and render-attempt history.
 
 Anchors override positional information for the anchored endpoint. Free endpoints keep absolute coordinates.
-Boxes and floating text are resizable. Box labels and floating text wrap within their visible bounds.
+Boxes, floating text, and image boxes are resizable. Box labels and floating text wrap within their visible bounds.
 
 ## Architecture
 
@@ -56,14 +57,18 @@ Boxes and floating text are resizable. Box labels and floating text wrap within 
 - AI proxy: backend endpoint will call Cerebras with `CEREBRAS_API_KEY`.
 - Multimodal context: frontend captures a board screenshot with `html2canvas` and sends it with serialized graph state.
 
-## AI Loop
+## Interactive AI
 
-Two invocation modes are under consideration:
+The current AI direction prioritizes bounded interactive use cases instead of a continuous assistant loop.
 
-- Continuous loop: send a new model request as soon as the prior request completes to approximate real-time AI presence.
-- Change-triggered loop: invoke only when user edits occur, which may produce better signal and lower noise.
+Implemented use cases:
 
-The prototype should support measuring both. The assistant thread needs history, and when context approaches the limit the backend should compact the conversation into a durable summary.
+- History summaries: each committed edit sends before/after graph state and screenshots to `gemma-4-31b` for a 2 to 5 word label.
+- AI image boxes: the user describes an image, the backend asks `gemma-4-31b` for standalone SVG, and the browser renders it as a resizable board element.
+
+SVG image generation encourages clean vector composition and subtle native SVG or CSS animation. If generated SVG fails browser parsing or loading, the frontend sends the error plus the full prior render-attempt history back to the backend so the model can repair the element.
+
+The full assistant loop remains deferred until more focused interactive workflows prove useful.
 
 ## LLM Tools
 
@@ -87,6 +92,7 @@ The initial tool set is:
 - `create_box`
 - `create_line`
 - `create_text`
+- `create_image`
 - `update_element`
 - `delete_element`
 - `clear_board`
@@ -108,6 +114,7 @@ The first implementation includes:
 - Independent line endpoint dragging, including anchoring by dropping an endpoint on a box edge.
 - Undo and redo for committed board states.
 - Cloud boxes rendered as cloud-shaped paths.
+- AI-generated SVG image boxes with automatic render-failure repair.
 - In-memory backend persistence.
 - History list with AI-generated 2 to 5 word commit descriptions.
 - JSON state preview and screenshot capture.

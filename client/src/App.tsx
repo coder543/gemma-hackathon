@@ -20,6 +20,7 @@ import {
 import {
   Camera,
   Eraser,
+  ImagePlus,
   MousePointer2,
   PenLine,
   Redo2,
@@ -75,14 +76,31 @@ type TextElement = {
   style?: ElementStyle
 }
 
-type WhiteboardElement = BoxElement | LineElement | TextElement
+type SvgAttempt = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+type ImageElement = {
+  id: number
+  type: 'image'
+  description: string
+  svg: string
+  x: number
+  y: number
+  width: number
+  height: number
+  renderAttempts?: SvgAttempt[]
+}
+
+type WhiteboardElement = BoxElement | LineElement | TextElement | ImageElement
 type Board = { elements: WhiteboardElement[]; updatedAt: string }
-type Tool = 'select' | 'line' | 'box' | 'text' | 'erase'
+type Tool = 'select' | 'line' | 'box' | 'text' | 'image' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
 type Draft = { tool: 'line' | 'box'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
 type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw'
-type Resize = { id: number; origin: Point; element: BoxElement | TextElement; handle: ResizeHandle }
+type Resize = { id: number; origin: Point; element: BoxElement | TextElement | ImageElement; handle: ResizeHandle }
 type LineEndpoint = 'start' | 'end'
 type EndpointDrag = { id: number; endpoint: LineEndpoint; line: LineElement }
 type InlineEdit = { id: number; value: string }
@@ -106,6 +124,7 @@ function App() {
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
+  const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
   const boardRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
@@ -182,7 +201,7 @@ function App() {
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
-  const commitSelectedPatch = (patch: Partial<BoxElement> | Partial<LineElement> | Partial<TextElement>) => {
+  const commitSelectedPatch = (patch: Partial<WhiteboardElement>) => {
     if (selectedId === null) return
     void commitBoard(
       board.elements.map((element) =>
@@ -231,6 +250,14 @@ function App() {
         },
       ])
       setSelectedId(nextId)
+      setTool('select')
+    }
+
+    if (tool === 'image') {
+      const description = window.prompt('Describe the image')
+      if (!description) return
+      captureBeforeSnapshot()
+      void createImageElement(description, point)
       setTool('select')
     }
   }
@@ -319,7 +346,11 @@ function App() {
       const anchor = anchorAtPoint(board.elements.filter((element) => element.id !== endpointDrag.id), point)
       const finalPoint = anchor ? pointForAnchor(board.elements, anchor) : point
       const finalElements = board.elements.map((element) => moveLineEndpoint(element, endpointDrag, finalPoint, anchor))
-      void commitBoard(finalElements)
+      if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
+        void commitBoard(finalElements)
+      } else {
+        beforeScreenshotRef.current = null
+      }
       setEndpointDrag(null)
     }
 
@@ -327,7 +358,11 @@ function App() {
       const dx = point.x - resize.origin.x
       const dy = point.y - resize.origin.y
       const finalElements = board.elements.map((element) => resizeElement(element, resize, dx, dy))
-      void commitBoard(finalElements)
+      if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
+        void commitBoard(finalElements)
+      } else {
+        beforeScreenshotRef.current = null
+      }
       setResize(null)
     }
 
@@ -335,7 +370,11 @@ function App() {
       const dx = point.x - drag.origin.x
       const dy = point.y - drag.origin.y
       const finalElements = board.elements.map((element) => moveElement(element, drag, dx, dy))
-      void commitBoard(finalElements)
+      if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
+        void commitBoard(finalElements)
+      } else {
+        beforeScreenshotRef.current = null
+      }
       setDrag(null)
     }
   }
@@ -371,6 +410,7 @@ function App() {
 
   const startInlineEdit = (element: WhiteboardElement, event: MouseEvent<SVGGElement>) => {
     event.stopPropagation()
+    if (element.type === 'image') return
     captureBeforeSnapshot()
     setTool('select')
     setSelectedId(element.id)
@@ -381,7 +421,7 @@ function App() {
     setInlineEdit({ id: element.id, value: editableText(element) })
   }
 
-  const startResize = (element: BoxElement | TextElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => {
+  const startResize = (element: BoxElement | TextElement | ImageElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => {
     event.stopPropagation()
     captureBeforeSnapshot()
     setTool('select')
@@ -409,7 +449,7 @@ function App() {
     if (!inlineEdit) return
     const element = board.elements.find((candidate) => candidate.id === inlineEdit.id)
     setInlineEdit(null)
-    if (!commit || !element || editableText(element) === inlineEdit.value) {
+    if (!commit || !element || element.type === 'image' || editableText(element) === inlineEdit.value) {
       beforeScreenshotRef.current = null
       return
     }
@@ -460,6 +500,60 @@ function App() {
     beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
   }
 
+  const createImageElement = async (description: string, point: Point) => {
+    const response = await fetch('/api/ai/image-svg', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    })
+    const result = await response.json()
+    const element: ImageElement = {
+      id: nextId,
+      type: 'image',
+      description,
+      svg: result.svg,
+      renderAttempts: result.renderAttempts,
+      x: point.x,
+      y: point.y,
+      width: 320,
+      height: 220,
+    }
+    void commitBoard([...board.elements, element])
+    setSelectedId(element.id)
+  }
+
+  const repairImageElement = async (element: ImageElement, error: string) => {
+    if (repairingImageIds.has(element.id) || (element.renderAttempts?.length ?? 0) >= 8) return
+
+    setRepairingImageIds((current) => new Set(current).add(element.id))
+    try {
+      captureBeforeSnapshot()
+      const response = await fetch('/api/ai/image-svg/repair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: element.description,
+          svg: element.svg,
+          error,
+          renderAttempts: element.renderAttempts ?? [],
+        }),
+      })
+      const result = await response.json()
+      const elements = board.elements.map((candidate) =>
+        candidate.id === element.id
+          ? ({ ...element, svg: result.svg, renderAttempts: result.renderAttempts } satisfies ImageElement)
+          : candidate,
+      )
+      void commitBoard(elements)
+    } finally {
+      setRepairingImageIds((current) => {
+        const next = new Set(current)
+        next.delete(element.id)
+        return next
+      })
+    }
+  }
+
   return (
     <Box className="app-shell">
       <Paper className="topbar" elevation={0}>
@@ -470,6 +564,7 @@ function App() {
             <ToolButton active={tool === 'line'} label="Line" onClick={() => setTool('line')} icon={<PenLine size={17} />} />
             <ToolButton active={tool === 'box'} label="Box" onClick={() => setTool('box')} icon={<Square size={17} />} />
             <ToolButton active={tool === 'text'} label="Text" onClick={() => setTool('text')} icon={<Type size={17} />} />
+            <ToolButton active={tool === 'image'} label="AI image" onClick={() => setTool('image')} icon={<ImagePlus size={17} />} />
             <ToolButton active={tool === 'erase'} label="Erase" onClick={() => setTool('erase')} icon={<Eraser size={17} />} />
           </ButtonGroup>
         </Stack>
@@ -547,9 +642,10 @@ function App() {
                 editing={inlineEdit?.id === element.id}
                 onPointerDown={(event) => handleElementPointerDown(element, event)}
                 onDoubleClick={(event) => startInlineEdit(element, event)}
+                onImageError={(image, error) => void repairImageElement(image, error)}
               />
             ))}
-            {selected && !inlineEdit && (selected.type === 'box' || selected.type === 'text') && (
+            {selected && !inlineEdit && (selected.type === 'box' || selected.type === 'text' || selected.type === 'image') && (
               <ResizeHandles element={selected} onPointerDown={startResize} />
             )}
             {selected && !inlineEdit && selected.type === 'line' && (
@@ -591,7 +687,7 @@ function App() {
   )
 }
 
-function editableText(element: WhiteboardElement) {
+function editableText(element: Exclude<WhiteboardElement, ImageElement>) {
   return element.type === 'text' ? element.text : (element.label ?? '')
 }
 
@@ -608,7 +704,27 @@ function nextPaint() {
 }
 
 function boardChanged(before: Board, after: Board) {
-  return JSON.stringify(before.elements) !== JSON.stringify(after.elements)
+  return elementsChanged(before.elements, after.elements)
+}
+
+function elementsChanged(before: WhiteboardElement[], after: WhiteboardElement[]) {
+  return JSON.stringify(before) !== JSON.stringify(after)
+}
+
+function svgParseError(svg: string) {
+  const document = new DOMParser().parseFromString(svg, 'image/svg+xml')
+  const parserError = document.querySelector('parsererror')
+  if (parserError) {
+    return parserError.textContent?.trim() || 'SVG parser error'
+  }
+  if (!document.documentElement || document.documentElement.tagName.toLowerCase() !== 'svg') {
+    return 'Response did not contain an SVG root element'
+  }
+  return null
+}
+
+function svgDataUrl(svg: string) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
 function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: number): WhiteboardElement {
@@ -660,11 +776,11 @@ function resizeElement(element: WhiteboardElement, resize: Resize, dx: number, d
   return { ...original, x, y, width, height }
 }
 
-function elementHeight(element: BoxElement | TextElement) {
+function elementHeight(element: BoxElement | TextElement | ImageElement) {
   return element.type === 'text' ? (element.height ?? 120) : element.height
 }
 
-function resizeHandlePoints(element: BoxElement | TextElement): Array<{ handle: ResizeHandle; x: number; y: number }> {
+function resizeHandlePoints(element: BoxElement | TextElement | ImageElement): Array<{ handle: ResizeHandle; x: number; y: number }> {
   const height = elementHeight(element)
   return [
     { handle: 'nw', x: element.x, y: element.y },
@@ -775,6 +891,16 @@ function Inspector({
       </Stack>
     )
   }
+  if (element.type === 'image') {
+    return (
+      <Stack spacing={1.5}>
+        <TextField label="Description" size="small" multiline minRows={3} value={values.description} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, description: event.target.value })} onBlur={() => commit('description')} />
+        <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
+        <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
+        <Typography variant="caption" color="text.secondary">SVG render failures are sent back to the model for repair.</Typography>
+      </Stack>
+    )
+  }
   return (
     <Stack spacing={1.5}>
       <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
@@ -790,6 +916,9 @@ function inspectorValues(element: WhiteboardElement): Record<string, string> {
   if (element.type === 'text') {
     return { text: element.text, width: String(Math.round(element.width)), height: String(Math.round(elementHeight(element))) }
   }
+  if (element.type === 'image') {
+    return { description: element.description, width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
+  }
   return { label: element.label ?? '' }
 }
 
@@ -800,6 +929,7 @@ function ElementView({
   editing,
   onPointerDown,
   onDoubleClick,
+  onImageError,
 }: {
   element: WhiteboardElement
   elements: WhiteboardElement[]
@@ -807,9 +937,11 @@ function ElementView({
   editing: boolean
   onPointerDown: (event: PointerEvent<SVGGElement>) => void
   onDoubleClick: (event: MouseEvent<SVGGElement>) => void
+  onImageError: (element: ImageElement, error: string) => void
 }) {
-  const stroke = element.style?.stroke ?? '#1f2937'
-  const strokeWidth = element.style?.strokeWidth ?? 2
+  const style = 'style' in element ? element.style : undefined
+  const stroke = style?.stroke ?? '#1f2937'
+  const strokeWidth = style?.strokeWidth ?? 2
   if (element.type === 'box') {
     return (
       <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
@@ -833,6 +965,14 @@ function ElementView({
       </g>
     )
   }
+  if (element.type === 'image') {
+    return (
+      <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
+        <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill="#ffffff" stroke={selected ? '#2563eb' : '#cbd5e1'} strokeWidth="2" />
+        <ImageSvgView element={element} onError={onImageError} />
+      </g>
+    )
+  }
   return (
     <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
       {!editing && (
@@ -841,6 +981,38 @@ function ElementView({
         </foreignObject>
       )}
     </g>
+  )
+}
+
+function ImageSvgView({ element, onError }: { element: ImageElement; onError: (element: ImageElement, error: string) => void }) {
+  const reportedSvgRef = useRef<string | null>(null)
+  const parseError = svgParseError(element.svg)
+
+  useEffect(() => {
+    if (!parseError || reportedSvgRef.current === element.svg) return
+    reportedSvgRef.current = element.svg
+    onError(element, parseError)
+  }, [element, onError, parseError])
+
+  if (parseError) {
+    return (
+      <foreignObject x={element.x} y={element.y} width={element.width} height={element.height} className="image-error-foreign-object">
+        <div className="image-error">Repairing SVG...</div>
+      </foreignObject>
+    )
+  }
+
+  return (
+    <image
+      className="image-node"
+      x={element.x}
+      y={element.y}
+      width={element.width}
+      height={element.height}
+      preserveAspectRatio="xMidYMid meet"
+      href={svgDataUrl(element.svg)}
+      onError={() => onError(element, 'SVG image failed to load in the browser')}
+    />
   )
 }
 
@@ -856,8 +1028,8 @@ function ResizeHandles({
   element,
   onPointerDown,
 }: {
-  element: BoxElement | TextElement
-  onPointerDown: (element: BoxElement | TextElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => void
+  element: BoxElement | TextElement | ImageElement
+  onPointerDown: (element: BoxElement | TextElement | ImageElement, handle: ResizeHandle, event: PointerEvent<SVGRectElement>) => void
 }) {
   return (
     <g className="resize-handles">
