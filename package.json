@@ -1,0 +1,22 @@
+{
+  "name": "gemma-hackathon",
+  "version": "1.0.0",
+  "description": "Glyph collaborative AI whiteboard hackathon prototype.",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w server && npm run build -w client",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}

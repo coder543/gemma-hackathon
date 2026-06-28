@@ -1,0 +1,146 @@
+.app-shell {
+  min-height: 100vh;
+  background: #eef2f7;
+  color: #111827;
+}
+
+.topbar {
+  height: 64px;
+  border-bottom: 1px solid #d8dee8;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  background: #ffffff;
+}
+
+.brand {
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.tool-active {
+  background: #e8f0ff !important;
+}
+
+.swatch {
+  width: 34px;
+  height: 32px;
+  border-radius: 4px !important;
+}
+
+.swatch span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.swatch.active {
+  outline: 2px solid #111827;
+  outline-offset: -5px;
+}
+
+.workspace {
+  height: calc(100vh - 64px);
+  display: grid;
+  grid-template-columns: 280px minmax(480px, 1fr) 340px;
+  overflow: hidden;
+}
+
+.left-panel,
+.right-panel {
+  border-radius: 0;
+  border-right: 1px solid #d8dee8;
+  background: #fbfcfe;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+
+.right-panel {
+  border-left: 1px solid #d8dee8;
+  border-right: 0;
+}
+
+.board-wrap {
+  padding: 18px;
+  overflow: auto;
+}
+
+.board {
+  width: 1600px;
+  height: 1000px;
+  display: block;
+  background-color: #f8fafc;
+  background-image:
+    linear-gradient(#dbe3ee 1px, transparent 1px),
+    linear-gradient(90deg, #dbe3ee 1px, transparent 1px);
+  background-size: 24px 24px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  touch-action: none;
+}
+
+.element {
+  cursor: move;
+}
+
+.element.selected rect,
+.element.selected ellipse,
+.element.selected line {
+  filter: drop-shadow(0 0 0.18rem rgba(37, 99, 235, 0.8));
+}
+
+.text-node {
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: rgba(255, 255, 255, 0.86);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.history-list {
+  max-height: 230px;
+  overflow: auto;
+}
+
+.history-entry {
+  border-left: 3px solid #2563eb;
+  padding: 8px 10px;
+  background: #f1f5f9;
+}
+
+.json-preview {
+  margin: 0;
+  max-height: 330px;
+  overflow: auto;
+  padding: 12px;
+  background: #101827;
+  color: #dbeafe;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.screenshot-preview {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 220px minmax(420px, 1fr);
+  }
+
+  .right-panel {
+    display: none;
+  }
+}
