@@ -21,6 +21,7 @@
 - [x] Add line endpoint editing.
 - [x] Render cloud boxes with a better cloud shape.
 - [x] Add undo/redo.
+- [x] Treat history as a timeline: grey future entries on undo/redo, delete them on a branching edit, and skip AI titles for undo/redo navigation.
 - [x] Replace placeholder history descriptions with generated summaries.
 
 ## Phase 3: AI Tool Layer

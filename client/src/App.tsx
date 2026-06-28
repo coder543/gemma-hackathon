@@ -98,6 +98,7 @@ type WhiteboardElement = BoxElement | LineElement | TextElement | ImageElement
 type Board = { elements: WhiteboardElement[]; updatedAt: string }
 type Tool = 'select' | 'line' | 'box' | 'text' | 'image' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
+type HistoryPoint = { board: Board; historyId: number | null }
 type Draft = { tool: 'line' | 'box' | 'image'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
 type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw'
@@ -113,6 +114,7 @@ const anchorSnapDistance = 28
 function App() {
   const [board, setBoard] = useState<Board>(defaultBoard)
   const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [currentHistoryId, setCurrentHistoryId] = useState<number | null>(null)
   const [tool, setTool] = useState<Tool>('select')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [boxShape, setBoxShape] = useState<BoxElement['shape']>('rectangle')
@@ -131,8 +133,9 @@ function App() {
   const boardRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
-  const undoStackRef = useRef<Board[]>([])
-  const redoStackRef = useRef<Board[]>([])
+  const undoStackRef = useRef<HistoryPoint[]>([])
+  const redoStackRef = useRef<HistoryPoint[]>([])
+  const currentHistoryIdRef = useRef<number | null>(null)
 
   const selected = useMemo(
     () => board.elements.find((element) => element.id === selectedId) ?? null,
@@ -147,11 +150,18 @@ function App() {
       setBoard(nextBoard)
       lastCommittedBoardRef.current = nextBoard
       setHistory(nextHistory.history)
+      const latestHistoryId = nextHistory.history[0]?.id ?? null
+      setCurrentHistoryId(latestHistoryId)
+      currentHistoryIdRef.current = latestHistoryId
     })
   }, [])
 
   const commitBoard = useCallback(async (elements: WhiteboardElement[], options: { recordUndo?: boolean; beforeBoard?: Board } = {}) => {
     const beforeBoard = options.beforeBoard ?? lastCommittedBoardRef.current
+    if (!elementsChanged(beforeBoard.elements, elements)) {
+      beforeScreenshotRef.current = null
+      return
+    }
     const beforeScreenshot = beforeScreenshotRef.current ? await beforeScreenshotRef.current : await captureBoardScreenshot(boardRef.current)
     beforeScreenshotRef.current = null
     const nextBoard = { elements, updatedAt: new Date().toISOString() }
@@ -169,17 +179,41 @@ function App() {
           beforeScreenshot,
           afterScreenshot,
         },
+        discardHistoryAfterId: currentHistoryIdRef.current,
       }),
     })
     const result = await response.json()
     if (options.recordUndo !== false && boardChanged(beforeBoard, result.board)) {
-      undoStackRef.current.push(beforeBoard)
+      undoStackRef.current.push({ board: beforeBoard, historyId: currentHistoryIdRef.current })
       redoStackRef.current = []
       setUndoDepth(undoStackRef.current.length)
       setRedoDepth(redoStackRef.current.length)
     }
     lastCommittedBoardRef.current = result.board
     setHistory(result.history)
+    const latestHistoryId = result.history[0]?.id ?? currentHistoryIdRef.current
+    setCurrentHistoryId(latestHistoryId)
+    currentHistoryIdRef.current = latestHistoryId
+  }, [])
+
+  const syncBoardWithoutHistory = useCallback(async (point: HistoryPoint) => {
+    const nextBoard = point.board
+    setBoard(nextBoard)
+    lastCommittedBoardRef.current = nextBoard
+    beforeScreenshotRef.current = null
+    setSelectedId((current) => nextBoard.elements.some((element) => element.id === current) ? current : null)
+    setInlineEdit(null)
+    const response = await fetch('/api/board/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextBoard),
+    })
+    const result = await response.json()
+    lastCommittedBoardRef.current = result.board
+    setBoard(result.board)
+    setHistory(result.history)
+    setCurrentHistoryId(point.historyId)
+    currentHistoryIdRef.current = point.historyId
   }, [])
 
   const nextId = useMemo(
@@ -487,22 +521,20 @@ function App() {
     const previous = undoStackRef.current.pop()
     if (!previous) return
     const current = lastCommittedBoardRef.current
-    redoStackRef.current.push(current)
+    redoStackRef.current.push({ board: current, historyId: currentHistoryIdRef.current })
     setUndoDepth(undoStackRef.current.length)
     setRedoDepth(redoStackRef.current.length)
-    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
-    void commitBoard(previous.elements, { recordUndo: false, beforeBoard: current })
+    void syncBoardWithoutHistory(previous)
   }
 
   const redoBoard = () => {
     const next = redoStackRef.current.pop()
     if (!next) return
     const current = lastCommittedBoardRef.current
-    undoStackRef.current.push(current)
+    undoStackRef.current.push({ board: current, historyId: currentHistoryIdRef.current })
     setUndoDepth(undoStackRef.current.length)
     setRedoDepth(redoStackRef.current.length)
-    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
-    void commitBoard(next.elements, { recordUndo: false, beforeBoard: current })
+    void syncBoardWithoutHistory(next)
   }
 
   const captureBeforeSnapshot = () => {
@@ -730,7 +762,7 @@ function App() {
           <Typography variant="overline">History</Typography>
           <Stack spacing={1} className="history-list">
             {history.map((entry) => (
-              <Box key={entry.id} className="history-entry">
+              <Box key={entry.id} className={currentHistoryId !== null && entry.id > currentHistoryId ? 'history-entry future' : 'history-entry'}>
                 <Typography variant="body2">{entry.description}</Typography>
                 <Typography variant="caption" color="text.secondary">
                   {new Date(entry.at).toLocaleTimeString()} - {entry.elementCount} objects

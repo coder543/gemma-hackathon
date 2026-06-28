@@ -90,6 +90,7 @@ const commitSchema = boardSchema.extend({
       afterScreenshot: z.string().nullable(),
     })
     .optional(),
+  discardHistoryAfterId: z.number().nullable().optional(),
 });
 
 type Board = z.infer<typeof boardSchema>;
@@ -160,6 +161,7 @@ const history: Array<{ id: number; at: string; description: string; elementCount
     elementCount: 0,
   },
 ];
+let nextHistoryId = 2;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -193,13 +195,22 @@ app.put('/api/board', async (request, response) => {
     elements: parsed.data.elements,
     updatedAt: parsed.data.updatedAt,
   };
+
+  if (parsed.data.discardHistoryAfterId !== undefined && parsed.data.discardHistoryAfterId !== null) {
+    const cutoff = parsed.data.discardHistoryAfterId;
+    while (history.length > 0 && history[0].id > cutoff) {
+      history.shift();
+    }
+  }
+
   const description = await summarizeCommittedChange(parsed.data.change, board);
   history.unshift({
-    id: history.length + 1,
+    id: nextHistoryId,
     at: board.updatedAt,
     description,
     elementCount: board.elements.length,
   });
+  nextHistoryId += 1;
 
   response.json({ ok: true, board, history });
 });
@@ -210,11 +221,28 @@ app.post('/api/board/clear', (_request, response) => {
     updatedAt: new Date().toISOString(),
   };
   history.unshift({
-    id: history.length + 1,
+    id: nextHistoryId,
     at: board.updatedAt,
     description: 'Cleared the board.',
     elementCount: 0,
   });
+  nextHistoryId += 1;
+
+  response.json({ ok: true, board, history });
+});
+
+app.put('/api/board/state', (request, response) => {
+  const parsed = boardSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid board payload', details: parsed.error.flatten() });
+    return;
+  }
+
+  board = {
+    elements: parsed.data.elements,
+    updatedAt: parsed.data.updatedAt,
+  };
 
   response.json({ ok: true, board, history });
 });
@@ -298,11 +326,12 @@ app.post('/api/tools/execute', async (request, response) => {
     board,
   );
   history.unshift({
-    id: history.length + 1,
+    id: nextHistoryId,
     at: board.updatedAt,
     description,
     elementCount: board.elements.length,
   });
+  nextHistoryId += 1;
 
   response.json({ ok: true, board, diff, history });
 });
