@@ -110,7 +110,8 @@
 
 .element.selected rect,
 .element.selected ellipse,
-.element.selected line {
+.element.selected line,
+.element.selected path {
   filter: drop-shadow(0 0 0.18rem rgba(37, 99, 235, 0.8));
 }
 

@@ -22,9 +22,11 @@ import {
   Eraser,
   MousePointer2,
   PenLine,
+  Redo2,
   Square,
   Trash2,
   Type,
+  Undo2,
 } from 'lucide-react'
 import './App.css'
 
@@ -102,9 +104,13 @@ function App() {
   const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null)
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
+  const [undoDepth, setUndoDepth] = useState(0)
+  const [redoDepth, setRedoDepth] = useState(0)
   const boardRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
+  const undoStackRef = useRef<Board[]>([])
+  const redoStackRef = useRef<Board[]>([])
 
   const selected = useMemo(
     () => board.elements.find((element) => element.id === selectedId) ?? null,
@@ -122,8 +128,8 @@ function App() {
     })
   }, [])
 
-  const commitBoard = useCallback(async (elements: WhiteboardElement[]) => {
-    const beforeBoard = lastCommittedBoardRef.current
+  const commitBoard = useCallback(async (elements: WhiteboardElement[], options: { recordUndo?: boolean; beforeBoard?: Board } = {}) => {
+    const beforeBoard = options.beforeBoard ?? lastCommittedBoardRef.current
     const beforeScreenshot = beforeScreenshotRef.current ? await beforeScreenshotRef.current : await captureBoardScreenshot(boardRef.current)
     beforeScreenshotRef.current = null
     const nextBoard = { elements, updatedAt: new Date().toISOString() }
@@ -144,6 +150,12 @@ function App() {
       }),
     })
     const result = await response.json()
+    if (options.recordUndo !== false && boardChanged(beforeBoard, result.board)) {
+      undoStackRef.current.push(beforeBoard)
+      redoStackRef.current = []
+      setUndoDepth(undoStackRef.current.length)
+      setRedoDepth(redoStackRef.current.length)
+    }
     lastCommittedBoardRef.current = result.board
     setHistory(result.history)
   }, [])
@@ -410,19 +422,38 @@ function App() {
   }
 
   const clearBoard = async () => {
-    const response = await fetch('/api/board/clear', { method: 'POST' })
-    const result = await response.json()
-    setBoard(result.board)
-    setHistory(result.history)
+    captureBeforeSnapshot()
+    await commitBoard([])
     setSelectedId(null)
     setInlineEdit(null)
-    lastCommittedBoardRef.current = result.board
     beforeScreenshotRef.current = null
   }
 
   const captureScreenshot = async () => {
     if (!boardRef.current) return
     setScreenshot(await captureBoardScreenshot(boardRef.current))
+  }
+
+  const undoBoard = () => {
+    const previous = undoStackRef.current.pop()
+    if (!previous) return
+    const current = lastCommittedBoardRef.current
+    redoStackRef.current.push(current)
+    setUndoDepth(undoStackRef.current.length)
+    setRedoDepth(redoStackRef.current.length)
+    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
+    void commitBoard(previous.elements, { recordUndo: false, beforeBoard: current })
+  }
+
+  const redoBoard = () => {
+    const next = redoStackRef.current.pop()
+    if (!next) return
+    const current = lastCommittedBoardRef.current
+    undoStackRef.current.push(current)
+    setUndoDepth(undoStackRef.current.length)
+    setRedoDepth(redoStackRef.current.length)
+    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
+    void commitBoard(next.elements, { recordUndo: false, beforeBoard: current })
   }
 
   const captureBeforeSnapshot = () => {
@@ -454,6 +485,16 @@ function App() {
           </ButtonGroup>
           <Tooltip title="Capture board screenshot">
             <IconButton onClick={captureScreenshot}><Camera size={18} /></IconButton>
+          </Tooltip>
+          <Tooltip title="Undo">
+            <span>
+              <IconButton onClick={undoBoard} disabled={undoDepth === 0}><Undo2 size={18} /></IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Redo">
+            <span>
+              <IconButton onClick={redoBoard} disabled={redoDepth === 0}><Redo2 size={18} /></IconButton>
+            </span>
           </Tooltip>
           <Tooltip title="Clear board">
             <IconButton onClick={clearBoard}><Trash2 size={18} /></IconButton>
@@ -564,6 +605,10 @@ function nextPaint() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
   })
+}
+
+function boardChanged(before: Board, after: Board) {
+  return JSON.stringify(before.elements) !== JSON.stringify(after.elements)
 }
 
 function moveElement(element: WhiteboardElement, drag: Drag, dx: number, dy: number): WhiteboardElement {
@@ -768,10 +813,12 @@ function ElementView({
   if (element.type === 'box') {
     return (
       <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
-        {element.shape === 'oval' ? (
+        {element.shape === 'cloud' ? (
+          <path d={cloudPath(element.x, element.y, element.width, element.height)} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
+        ) : element.shape === 'oval' ? (
           <ellipse cx={element.x + element.width / 2} cy={element.y + element.height / 2} rx={element.width / 2} ry={element.height / 2} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
         ) : (
-          <rect x={element.x} y={element.y} width={element.width} height={element.height} rx={element.shape === 'cloud' ? 22 : 4} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} strokeDasharray={element.shape === 'cloud' ? '8 5' : undefined} />
+          <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
         )}
         {element.label && !editing && <WrappedBoxLabel box={element} />}
       </g>
@@ -959,7 +1006,25 @@ function DraftView({
   if (boxShape === 'oval') {
     return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
   }
-  return <rect x={x} y={y} width={width} height={height} rx={boxShape === 'cloud' ? 22 : 4} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray={boxShape === 'cloud' ? '8 5' : '6 5'} />
+  if (boxShape === 'cloud') {
+    return <path d={cloudPath(x, y, width, height)} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+  }
+  return <rect x={x} y={y} width={width} height={height} rx="4" fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+}
+
+function cloudPath(x: number, y: number, width: number, height: number) {
+  const w = Math.max(width, 32)
+  const h = Math.max(height, 32)
+  return [
+    `M ${x + w * 0.22} ${y + h * 0.78}`,
+    `C ${x + w * 0.08} ${y + h * 0.78}, ${x + w * 0.02} ${y + h * 0.62}, ${x + w * 0.12} ${y + h * 0.52}`,
+    `C ${x + w * 0.03} ${y + h * 0.38}, ${x + w * 0.16} ${y + h * 0.24}, ${x + w * 0.31} ${y + h * 0.30}`,
+    `C ${x + w * 0.36} ${y + h * 0.10}, ${x + w * 0.62} ${y + h * 0.10}, ${x + w * 0.67} ${y + h * 0.30}`,
+    `C ${x + w * 0.84} ${y + h * 0.22}, ${x + w * 0.98} ${y + h * 0.38}, ${x + w * 0.88} ${y + h * 0.54}`,
+    `C ${x + w * 1.02} ${y + h * 0.66}, ${x + w * 0.92} ${y + h * 0.82}, ${x + w * 0.75} ${y + h * 0.78}`,
+    `C ${x + w * 0.62} ${y + h * 0.92}, ${x + w * 0.38} ${y + h * 0.92}, ${x + w * 0.22} ${y + h * 0.78}`,
+    'Z',
+  ].join(' ')
 }
 
 export default App

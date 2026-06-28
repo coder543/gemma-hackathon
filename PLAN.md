@@ -17,8 +17,8 @@
 - [x] Add first-pass box-side anchors for line endpoints.
 - [x] Add robust resize handles for boxes and text.
 - [x] Add line endpoint editing.
-- [ ] Render cloud boxes with a better cloud shape.
-- [ ] Add undo/redo.
+- [x] Render cloud boxes with a better cloud shape.
+- [x] Add undo/redo.
 - [x] Replace placeholder history descriptions with generated summaries.
 
 ## Phase 3: AI Tool Layer

@@ -89,6 +89,8 @@ The first implementation includes:
 - Local drag/edit previews with backend commits only when the interaction is complete.
 - Resizable boxes and floating text objects.
 - Independent line endpoint dragging, including anchoring by dropping an endpoint on a box edge.
+- Undo and redo for committed board states.
+- Cloud boxes rendered as cloud-shaped paths.
 - In-memory backend persistence.
 - History list with AI-generated 2 to 5 word commit descriptions.
 - JSON state preview and screenshot capture.
