@@ -35,7 +35,7 @@
 - [x] Add AI-generated SVG image boxes from user descriptions.
 - [x] Encourage animated SVG output for generated image boxes.
 - [x] Detect SVG render failures and automatically ask the model to repair using previous render-attempt history.
-- [ ] Add regenerate/refine controls for AI image boxes.
+- [x] Add regenerate/refine controls for AI image boxes.
 - [ ] Add more focused interactive AI commands for selected board elements.
 
 ## Deferred: Assistant Loop

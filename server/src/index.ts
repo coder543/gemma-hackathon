@@ -135,6 +135,13 @@ const repairImageSvgSchema = z.object({
   renderAttempts: z.array(svgAttemptSchema).optional(),
 });
 
+const refineImageSvgSchema = z.object({
+  description: z.string().min(1),
+  svg: z.string(),
+  instruction: z.string().min(1),
+  renderAttempts: z.array(svgAttemptSchema).optional(),
+});
+
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 
@@ -235,6 +242,18 @@ app.post('/api/ai/image-svg/repair', async (request, response) => {
   }
 
   const result = await repairImageSvg(parsed.data);
+  response.json(result);
+});
+
+app.post('/api/ai/image-svg/refine', async (request, response) => {
+  const parsed = refineImageSvgSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid SVG refine payload', details: parsed.error.flatten() });
+    return;
+  }
+
+  const result = await refineImageSvg(parsed.data);
   response.json(result);
 });
 
@@ -428,6 +447,23 @@ async function repairImageSvg(payload: z.infer<typeof repairImageSvgSchema>) {
   return { svg, renderAttempts: attempts };
 }
 
+async function refineImageSvg(payload: z.infer<typeof refineImageSvgSchema>) {
+  const attempts: SvgAttempt[] = [
+    ...(payload.renderAttempts ?? []),
+    {
+      role: 'user' as const,
+      content: `Refine this SVG image box.\n\nOriginal description:\n${payload.description}\n\nUser refinement instruction:\n${payload.instruction}\n\nCurrent SVG:\n${payload.svg}\n\nReturn an updated standalone SVG only. Preserve useful existing visual structure unless the instruction asks otherwise. Keep or improve subtle animation when appropriate.`,
+    },
+  ];
+
+  const svg = process.env.CEREBRAS_API_KEY
+    ? await requestSvgFromCerebras(attempts)
+    : fallbackSvg(`${payload.description} ${payload.instruction}`);
+
+  attempts.push({ role: 'assistant' as const, content: svg });
+  return { svg, renderAttempts: attempts };
+}
+
 async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
   try {
     const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
@@ -444,7 +480,7 @@ async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
           {
             role: 'system',
             content:
-              'You create compact standalone SVG illustrations for a whiteboard app. Return only raw SVG markup. No markdown fences, explanations, external assets, scripts, or event handlers. You may include inline CSS and native SVG/SMIL animations when useful.',
+              'You create compact standalone animated SVG illustrations for a whiteboard app. Return only raw SVG markup. No markdown fences, explanations, external assets, scripts, or event handlers. Include at least one subtle declarative animation using inline CSS keyframes or native SVG animate/animateTransform unless the user explicitly asks for a static image.',
           },
           ...attempts.map((attempt) => ({
             role: attempt.role,
@@ -475,7 +511,8 @@ Requirements:
 - Return only a single complete <svg>...</svg> document.
 - Include viewBox, width, and height.
 - Prefer clean vector shapes and readable composition.
-- Add subtle animation with SVG animate/animateTransform or inline CSS animation when it improves the result.
+- Include at least one subtle animation with SVG animate/animateTransform or inline CSS keyframes. Good defaults include pulsing glow, drifting detail, blinking indicator, moving dash, rotating accent, or gentle bobbing.
+- Keep animation tasteful and loop smoothly.
 - Do not use JavaScript, external references, remote images, or markdown fences.`;
 }
 

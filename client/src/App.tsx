@@ -24,6 +24,7 @@ import {
   MousePointer2,
   PenLine,
   Redo2,
+  RefreshCw,
   Square,
   Trash2,
   Type,
@@ -125,6 +126,7 @@ function App() {
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
+  const [generatingImageIds, setGeneratingImageIds] = useState<Set<number>>(() => new Set())
   const boardRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
@@ -554,6 +556,44 @@ function App() {
     }
   }
 
+  const updateGeneratedImage = async (element: ImageElement, mode: 'regenerate' | 'refine') => {
+    const instruction = mode === 'refine' ? window.prompt('How should Glyph refine this image?', element.description) : null
+    if (mode === 'refine' && !instruction) return
+
+    setGeneratingImageIds((current) => new Set(current).add(element.id))
+    try {
+      captureBeforeSnapshot()
+      const response = await fetch(mode === 'regenerate' ? '/api/ai/image-svg' : '/api/ai/image-svg/refine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          mode === 'regenerate'
+            ? { description: element.description }
+            : {
+                description: element.description,
+                instruction,
+                svg: element.svg,
+                renderAttempts: element.renderAttempts ?? [],
+              },
+        ),
+      })
+      const result = await response.json()
+      const nextDescription = mode === 'refine' ? `${element.description}; ${instruction}` : element.description
+      const elements = board.elements.map((candidate) =>
+        candidate.id === element.id
+          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts } satisfies ImageElement)
+          : candidate,
+      )
+      void commitBoard(elements)
+    } finally {
+      setGeneratingImageIds((current) => {
+        const next = new Set(current)
+        next.delete(element.id)
+        return next
+      })
+    }
+  }
+
   return (
     <Box className="app-shell">
       <Paper className="topbar" elevation={0}>
@@ -618,7 +658,16 @@ function App() {
           </FormControl>
           <Divider />
           <Typography variant="overline">Selected</Typography>
-          {selected ? <Inspector element={selected} onBeginEdit={captureBeforeSnapshot} onCommit={commitSelectedPatch} /> : <Typography color="text.secondary">No element selected.</Typography>}
+          {selected ? (
+            <Inspector
+              element={selected}
+              busy={selected.type === 'image' && generatingImageIds.has(selected.id)}
+              onBeginEdit={captureBeforeSnapshot}
+              onCommit={commitSelectedPatch}
+              onRegenerateImage={(element) => void updateGeneratedImage(element, 'regenerate')}
+              onRefineImage={(element) => void updateGeneratedImage(element, 'refine')}
+            />
+          ) : <Typography color="text.secondary">No element selected.</Typography>}
         </Paper>
 
         <Box className="board-wrap" ref={boardRef}>
@@ -847,12 +896,18 @@ function ToolButton({ active, label, icon, onClick }: { active: boolean; label: 
 
 function Inspector({
   element,
+  busy = false,
   onBeginEdit,
   onCommit,
+  onRegenerateImage,
+  onRefineImage,
 }: {
   element: WhiteboardElement
+  busy?: boolean
   onBeginEdit: () => void
   onCommit: (patch: Partial<WhiteboardElement>) => void
+  onRegenerateImage: (element: ImageElement) => void
+  onRefineImage: (element: ImageElement) => void
 }) {
   const [values, setValues] = useState(() => inspectorValues(element))
 
@@ -894,6 +949,14 @@ function Inspector({
   if (element.type === 'image') {
     return (
       <Stack spacing={1.5}>
+        <Stack direction="row" spacing={1}>
+          <Button size="small" variant="outlined" startIcon={<RefreshCw size={16} />} disabled={busy} onClick={() => onRegenerateImage(element)}>
+            Refresh
+          </Button>
+          <Button size="small" variant="outlined" disabled={busy} onClick={() => onRefineImage(element)}>
+            Refine
+          </Button>
+        </Stack>
         <TextField label="Description" size="small" multiline minRows={3} value={values.description} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, description: event.target.value })} onBlur={() => commit('description')} />
         <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
         <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
