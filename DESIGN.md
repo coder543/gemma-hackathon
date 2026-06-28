@@ -77,6 +77,23 @@ The model-facing tool layer should mirror UI capabilities:
 
 Tool results should return the updated board JSON and enough metadata for the history summarizer.
 
+The backend exposes this layer through:
+
+- `GET /api/tools`: returns model-facing function tool metadata.
+- `POST /api/tools/execute`: validates and applies one board mutation tool call.
+
+The initial tool set is:
+
+- `create_box`
+- `create_line`
+- `create_text`
+- `update_element`
+- `delete_element`
+- `clear_board`
+- `anchor_line_endpoint`
+
+Each execution validates the resulting graph against the shared board schema and returns `{ added, removed, updated }` element ID arrays.
+
 ## Current Prototype
 
 The first implementation includes:

@@ -23,10 +23,10 @@
 
 ## Phase 3: AI Tool Layer
 
-- [ ] Define server-side tool schemas for board mutations.
-- [ ] Expose create/update/delete/clear/anchor tools to the assistant loop.
-- [ ] Validate every tool call against the same board schema used by the UI.
-- [ ] Return normalized graph diffs for history and debugging.
+- [x] Define server-side tool schemas for board mutations.
+- [x] Expose create/update/delete/clear/anchor tools to the assistant loop.
+- [x] Validate every tool call against the same board schema used by the UI.
+- [x] Return normalized graph diffs for history and debugging.
 
 ## Phase 4: Cerebras Integration
 

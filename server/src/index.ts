@@ -77,6 +77,32 @@ const commitSchema = boardSchema.extend({
 
 type Board = z.infer<typeof boardSchema>;
 type CommitContext = z.infer<typeof commitSchema>['change'];
+type WhiteboardElement = z.infer<typeof elementSchema>;
+type BoxElement = z.infer<typeof boxSchema>;
+
+const createBoxArgsSchema = boxSchema.omit({ id: true, type: true });
+const createLineArgsSchema = lineSchema.omit({ id: true, type: true });
+const createTextArgsSchema = textSchema.omit({ id: true, type: true });
+const updateElementArgsSchema = z.object({
+  id: z.number(),
+  patch: z.record(z.string(), z.unknown()),
+});
+const deleteElementArgsSchema = z.object({ id: z.number() });
+const anchorLineEndpointArgsSchema = z.object({
+  lineId: z.number(),
+  endpoint: z.enum(['start', 'end']),
+  anchor: anchorSchema.nullable().optional(),
+  point: pointSchema.optional(),
+});
+const toolCallSchema = z.discriminatedUnion('name', [
+  z.object({ name: z.literal('create_box'), args: createBoxArgsSchema }),
+  z.object({ name: z.literal('create_line'), args: createLineArgsSchema }),
+  z.object({ name: z.literal('create_text'), args: createTextArgsSchema }),
+  z.object({ name: z.literal('update_element'), args: updateElementArgsSchema }),
+  z.object({ name: z.literal('delete_element'), args: deleteElementArgsSchema }),
+  z.object({ name: z.literal('clear_board'), args: z.object({}) }),
+  z.object({ name: z.literal('anchor_line_endpoint'), args: anchorLineEndpointArgsSchema }),
+]);
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -155,6 +181,54 @@ app.post('/api/board/clear', (_request, response) => {
 
 app.get('/api/history', (_request, response) => {
   response.json({ history });
+});
+
+app.get('/api/tools', (_request, response) => {
+  response.json({ tools: toolDefinitions });
+});
+
+app.post('/api/tools/execute', async (request, response) => {
+  const parsed = toolCallSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid tool call', details: parsed.error.flatten() });
+    return;
+  }
+
+  const before = board;
+  let nextBoard: Board;
+  let diff: ReturnType<typeof graphDiff>;
+
+  try {
+    const nextElements = applyToolCall(board.elements, parsed.data);
+    nextBoard = boardSchema.parse({
+      elements: nextElements,
+      updatedAt: new Date().toISOString(),
+    });
+    diff = graphDiff(before.elements, nextBoard.elements);
+    board = nextBoard;
+  } catch (error) {
+    response.status(400).json({ error: error instanceof Error ? error.message : 'Tool call failed' });
+    return;
+  }
+
+  const description = await summarizeCommittedChange(
+    {
+      before,
+      after: nextBoard,
+      beforeScreenshot: null,
+      afterScreenshot: null,
+    },
+    board,
+  );
+  history.unshift({
+    id: history.length + 1,
+    at: board.updatedAt,
+    description,
+    elementCount: board.elements.length,
+  });
+
+  response.json({ ok: true, board, diff, history });
 });
 
 app.post('/api/ai/turn', (_request, response) => {
@@ -265,3 +339,208 @@ function fallbackChangeDescription(change: CommitContext, currentBoard: Board) {
   if (change.before.elements.length === 0 && change.after.elements.length === 0) return 'Updated empty board';
   return 'Updated whiteboard';
 }
+
+function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof toolCallSchema>) {
+  switch (toolCall.name) {
+    case 'create_box':
+      return [...elements, { id: nextElementId(elements), type: 'box' as const, ...toolCall.args }];
+    case 'create_line':
+      return [...elements, { id: nextElementId(elements), type: 'line' as const, ...toolCall.args }];
+    case 'create_text':
+      return [...elements, { id: nextElementId(elements), type: 'text' as const, ...toolCall.args }];
+    case 'update_element':
+      return elements.map((element) => {
+        if (element.id !== toolCall.args.id) return element;
+        return elementSchema.parse({
+          ...element,
+          ...toolCall.args.patch,
+          id: element.id,
+          type: element.type,
+        });
+      });
+    case 'delete_element':
+      return elements.filter((element) => element.id !== toolCall.args.id);
+    case 'clear_board':
+      return [];
+    case 'anchor_line_endpoint':
+      return elements.map((element) => {
+        if (element.type !== 'line' || element.id !== toolCall.args.lineId) return element;
+        const anchor = toolCall.args.anchor ?? undefined;
+        const point = anchor ? pointForAnchor(elements, anchor) : toolCall.args.point;
+
+        if (!anchor && !point) {
+          throw new Error('Unanchored line endpoints require a point');
+        }
+
+        return lineSchema.parse({
+          ...element,
+          [`${toolCall.args.endpoint}Anchor`]: anchor,
+          [toolCall.args.endpoint]: point ?? element[toolCall.args.endpoint],
+        });
+      });
+  }
+}
+
+function nextElementId(elements: WhiteboardElement[]) {
+  return elements.reduce((maxId, element) => Math.max(maxId, element.id), 0) + 1;
+}
+
+function pointForAnchor(elements: WhiteboardElement[], anchor: z.infer<typeof anchorSchema>) {
+  const box = elements.find((element): element is BoxElement => element.type === 'box' && element.id === anchor.elementId);
+  if (!box) {
+    throw new Error(`Anchor target ${anchor.elementId} does not exist`);
+  }
+
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  switch (anchor.side) {
+    case 'top':
+      return { x: center.x, y: box.y };
+    case 'right':
+      return { x: box.x + box.width, y: center.y };
+    case 'bottom':
+      return { x: center.x, y: box.y + box.height };
+    case 'left':
+      return { x: box.x, y: center.y };
+    case 'center':
+      return center;
+  }
+}
+
+function graphDiff(before: WhiteboardElement[], after: WhiteboardElement[]) {
+  const beforeById = new Map(before.map((element) => [element.id, element]));
+  const afterById = new Map(after.map((element) => [element.id, element]));
+
+  return {
+    added: after.filter((element) => !beforeById.has(element.id)).map((element) => element.id),
+    removed: before.filter((element) => !afterById.has(element.id)).map((element) => element.id),
+    updated: after
+      .filter((element) => {
+        const previous = beforeById.get(element.id);
+        return previous && JSON.stringify(previous) !== JSON.stringify(element);
+      })
+      .map((element) => element.id),
+  };
+}
+
+const anchorParameterSchema = {
+  type: 'object',
+  properties: {
+    elementId: { type: 'number' },
+    side: { type: 'string', enum: ['top', 'right', 'bottom', 'left', 'center'] },
+  },
+  required: ['elementId', 'side'],
+};
+
+const toolDefinitions = [
+  {
+    type: 'function',
+    function: {
+      name: 'create_box',
+      description: 'Create a rectangle, oval, or cloud box on the whiteboard.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          shape: { type: 'string', enum: ['rectangle', 'oval', 'cloud'] },
+          x: { type: 'number' },
+          y: { type: 'number' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          style: { type: 'object' },
+        },
+        required: ['shape', 'x', 'y', 'width', 'height'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_line',
+      description: 'Create a line, arrow, or double arrow, optionally anchored to boxes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          label: { type: 'string' },
+          lineStyle: { type: 'string', enum: ['plain', 'arrow', 'doubleArrow'] },
+          start: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] },
+          end: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] },
+          startAnchor: anchorParameterSchema,
+          endAnchor: anchorParameterSchema,
+          style: { type: 'object' },
+        },
+        required: ['lineStyle', 'start', 'end'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_text',
+      description: 'Create a floating text object.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          x: { type: 'number' },
+          y: { type: 'number' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          style: { type: 'object' },
+        },
+        required: ['text', 'x', 'y', 'width'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_element',
+      description: 'Update geometry, labels, text, shape, line style, anchors, or style for an existing element.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          patch: { type: 'object' },
+        },
+        required: ['id', 'patch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_element',
+      description: 'Delete one whiteboard element.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'number' } },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'clear_board',
+      description: 'Delete all whiteboard elements.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'anchor_line_endpoint',
+      description: 'Anchor or unanchor one endpoint of a line.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lineId: { type: 'number' },
+          endpoint: { type: 'string', enum: ['start', 'end'] },
+          anchor: anchorParameterSchema,
+          point: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x', 'y'] },
+        },
+        required: ['lineId', 'endpoint'],
+      },
+    },
+  },
+];
