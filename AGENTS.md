@@ -8,3 +8,5 @@
 - Update `DESIGN.md` when the product direction, architecture, graph schema, AI loop, or tool contract changes.
 - Keep implementation changes aligned with the existing TypeScript React frontend and TypeScript backend.
 - Prefer small, working increments that preserve the single-board prototype while moving toward the Cerebras-powered AI assistant.
+- After each implementation change, run `npm run typecheck`, `npm run lint`, and `npm run build` before considering the work complete.
+- Commit progress in small, coherent commits as the project advances.

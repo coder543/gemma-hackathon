@@ -85,6 +85,12 @@ const history: Array<{ id: number; at: string; description: string; elementCount
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
+app.get('/', (_request, response) => {
+  response
+    .type('html')
+    .send('<p>Glyph API is running. Open <a href="http://localhost:5173/">http://localhost:5173/</a> for the whiteboard.</p>');
+});
+
 app.get('/api/health', (_request, response) => {
   response.json({
     ok: true,
