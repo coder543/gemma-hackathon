@@ -511,7 +511,7 @@ Requirements:
 - Return only a single complete <svg>...</svg> document.
 - Include viewBox, width, and height.
 - Prefer clean vector shapes and readable composition.
-- Include at least one subtle animation with SVG animate/animateTransform or inline CSS keyframes. Good defaults include pulsing glow, drifting detail, blinking indicator, moving dash, rotating accent, or gentle bobbing.
+- Include at least one subtle animation with SVG animate/animateTransform or inline CSS keyframes. Good defaults include pulsing glow, drifting detail, blinking indicator, moving dash, or rotating accent.
 - Keep animation tasteful and loop smoothly.
 - Do not use JavaScript, external references, remote images, or markdown fences.`;
 }
