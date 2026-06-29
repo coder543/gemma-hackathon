@@ -118,6 +118,8 @@ type InlineEdit = { id: number; value: string }
 
 const defaultBoard: Board = { elements: [], updatedAt: new Date().toISOString() }
 const colors = ['#1f2937', '#2563eb', '#e11d48', '#16a34a', '#f59e0b']
+const defaultElementStroke = '#1f2937'
+const defaultElementFill = '#ffffff'
 const anchorSnapDistance = 28
 const boardWidth = 1600
 const boardHeight = 1000
@@ -1168,11 +1170,11 @@ function elementBounds(element: WhiteboardElement, elements: WhiteboardElement[]
 
 function screenshotElementSvg(element: WhiteboardElement, elements: WhiteboardElement[]) {
   const style = 'style' in element ? element.style : undefined
-  const stroke = escapeXml(style?.stroke ?? '#1f2937')
+  const stroke = escapeXml(style?.stroke ?? defaultElementStroke)
   const strokeWidth = style?.strokeWidth ?? 2
 
   if (element.type === 'box') {
-    const fill = escapeXml(element.style?.fill ?? '#ffffff')
+    const fill = escapeXml(element.style?.fill ?? defaultElementFill)
     const label = element.label ? screenshotText(element.label, element.x + element.width / 2, element.y + element.height / 2, element.width - 16) : ''
     if (element.shape === 'cloud') {
       return `<path d="${cloudPath(element.x, element.y, element.width, element.height)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>${label}`
@@ -1544,17 +1546,18 @@ function ElementView({
   onImageError: (element: ImageElement, error: string) => void
 }) {
   const style = 'style' in element ? element.style : undefined
-  const stroke = style?.stroke ?? '#1f2937'
+  const stroke = themedStroke(style?.stroke)
   const strokeWidth = style?.strokeWidth ?? 2
   if (element.type === 'box') {
+    const fill = themedFill(element.style?.fill)
     return (
       <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
         {element.shape === 'cloud' ? (
-          <path d={cloudPath(element.x, element.y, element.width, element.height)} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
+          <path d={cloudPath(element.x, element.y, element.width, element.height)} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
         ) : element.shape === 'oval' ? (
-          <ellipse cx={element.x + element.width / 2} cy={element.y + element.height / 2} rx={element.width / 2} ry={element.height / 2} fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
+          <ellipse cx={element.x + element.width / 2} cy={element.y + element.height / 2} rx={element.width / 2} ry={element.height / 2} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
         ) : (
-          <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill={element.style?.fill ?? '#fff'} stroke={stroke} strokeWidth={strokeWidth} />
+          <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
         )}
         {element.label && !editing && <WrappedBoxLabel box={element} />}
       </g>
@@ -1582,7 +1585,7 @@ function ElementView({
     <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
       {!editing && (
         <foreignObject className="text-foreign-object" x={element.x} y={element.y} width={element.width} height={elementHeight(element)}>
-          <div className="text-node" style={{ color: element.style?.stroke ?? 'var(--canvas-node-text)', fontSize: element.style?.fontSize }}>{element.text}</div>
+          <div className="text-node" style={{ color: themedStroke(element.style?.stroke, 'var(--canvas-node-text)'), fontSize: element.style?.fontSize }}>{element.text}</div>
         </foreignObject>
       )}
     </g>
@@ -1627,6 +1630,24 @@ function WrappedBoxLabel({ box }: { box: BoxElement }) {
       <div className="box-label">{box.label}</div>
     </foreignObject>
   )
+}
+
+function themedStroke(stroke?: string, fallback = 'var(--board-ink)') {
+  if (!stroke) return fallback
+  return isDefaultElementStroke(stroke) ? 'var(--board-ink)' : stroke
+}
+
+function themedFill(fill?: string) {
+  if (!fill) return 'var(--box-fill)'
+  return isDefaultElementFill(fill) ? 'var(--box-fill)' : fill
+}
+
+function isDefaultElementStroke(stroke: string) {
+  return stroke.toLowerCase() === defaultElementStroke
+}
+
+function isDefaultElementFill(fill: string) {
+  return fill.toLowerCase() === defaultElementFill || fill.toLowerCase() === '#fff'
 }
 
 function ResizeHandles({
@@ -1807,15 +1828,15 @@ function DraftView({
   const width = Math.abs(draft.current.x - draft.start.x)
   const height = Math.abs(draft.current.y - draft.start.y)
   if (draft.tool === 'image') {
-    return <rect x={x} y={y} width={width} height={height} rx="4" fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+    return <rect x={x} y={y} width={width} height={height} rx="4" fill="var(--image-frame-bg)" stroke={themedStroke(stroke)} strokeWidth="2" strokeDasharray="6 5" />
   }
   if (boxShape === 'oval') {
-    return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+    return <ellipse cx={x + width / 2} cy={y + height / 2} rx={width / 2} ry={height / 2} fill="var(--box-fill)" stroke={themedStroke(stroke)} strokeWidth="2" strokeDasharray="6 5" />
   }
   if (boxShape === 'cloud') {
-    return <path d={cloudPath(x, y, width, height)} fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+    return <path d={cloudPath(x, y, width, height)} fill="var(--box-fill)" stroke={themedStroke(stroke)} strokeWidth="2" strokeDasharray="6 5" />
   }
-  return <rect x={x} y={y} width={width} height={height} rx="4" fill="#fff" stroke={stroke} strokeWidth="2" strokeDasharray="6 5" />
+  return <rect x={x} y={y} width={width} height={height} rx="4" fill="var(--box-fill)" stroke={themedStroke(stroke)} strokeWidth="2" strokeDasharray="6 5" />
 }
 
 function cloudPath(x: number, y: number, width: number, height: number) {

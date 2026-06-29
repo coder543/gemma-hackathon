@@ -11,6 +11,9 @@
   --board-grid: #dbe3ee;
   --board-border: #cbd5e1;
   --board-text: #111827;
+  --board-ink: #1f2937;
+  --box-fill: #ffffff;
+  --box-text: #111827;
   --image-frame-bg: #ffffff;
   --canvas-node-bg: rgba(255, 255, 255, 0.86);
   --canvas-node-text: #111827;
@@ -35,6 +38,9 @@
     --board-grid: #1e293b;
     --board-border: #475569;
     --board-text: #e5e7eb;
+    --board-ink: #cbd5e1;
+    --box-fill: #1f2937;
+    --box-text: #f8fafc;
     --image-frame-bg: #111827;
     --canvas-node-bg: rgba(15, 23, 42, 0.88);
     --canvas-node-text: #e5e7eb;
@@ -172,6 +178,9 @@
   --board-grid: #dbe3ee;
   --board-border: #cbd5e1;
   --board-text: #111827;
+  --board-ink: #1f2937;
+  --box-fill: #ffffff;
+  --box-text: #111827;
   --image-frame-bg: #ffffff;
 }
 
@@ -191,7 +200,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  color: #111827;
+  color: var(--box-text);
   font: 16px/1.25 Inter, ui-sans-serif, system-ui, sans-serif;
   overflow-wrap: anywhere;
   text-align: center;

@@ -53,6 +53,7 @@ Boxes, floating text, and image boxes are resizable. Box labels and floating tex
 
 - Frontend: TypeScript React with Vite and MUI.
 - The app uses MUI's light/dark theme provider from `prefers-color-scheme` for component theming. Custom CSS variables are reserved for the whiteboard canvas, SVG overlays, and app layout surfaces.
+- Default graph colors are stored in a light-mode-friendly form, but the renderer maps default white box fills and default dark strokes/text to theme-aware board colors so existing elements remain readable in dark mode.
 - Backend: minimal TypeScript Express service.
 - Persistence: in-memory for the prototype, replaceable with file or database storage.
 - AI proxy: backend endpoint will call Cerebras with `CEREBRAS_API_KEY`.
