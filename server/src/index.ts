@@ -148,6 +148,11 @@ const refineImageSvgSchema = z.object({
 
 const chatEditSchema = z.object({
   message: z.string().min(1),
+  chatHistory: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.string(),
+    reasoningContent: z.string().optional(),
+  })).optional(),
   discardHistoryAfterId: z.number().nullable().optional(),
 });
 
@@ -342,15 +347,17 @@ app.post('/api/ai/chat', async (request, response) => {
   const before = board;
   let nextBoard: Board;
   let assistantMessage: string;
+  let assistantReasoningContent: string | undefined;
   let appliedToolCalls: Array<{ name: string; args: unknown }> = [];
 
   try {
-    const result = await planBoardEditWithTools(parsed.data.message, before);
+    const result = await planBoardEditWithTools(parsed.data.message, before, parsed.data.chatHistory ?? []);
     nextBoard = boardSchema.parse({
       elements: result.elements,
       updatedAt: new Date().toISOString(),
     });
     assistantMessage = result.message;
+    assistantReasoningContent = result.reasoningContent;
     appliedToolCalls = result.toolCalls;
   } catch (error) {
     response.status(500).json({ error: error instanceof Error ? error.message : 'AI edit failed' });
@@ -359,7 +366,7 @@ app.post('/api/ai/chat', async (request, response) => {
 
   const diff = graphDiff(before.elements, nextBoard.elements);
   if (diff.added.length === 0 && diff.removed.length === 0 && diff.updated.length === 0) {
-    response.json({ ok: true, board, diff, history, message: assistantMessage, toolCalls: appliedToolCalls });
+    response.json({ ok: true, board, diff, history, message: assistantMessage, reasoningContent: assistantReasoningContent, toolCalls: appliedToolCalls });
     return;
   }
 
@@ -382,7 +389,7 @@ app.post('/api/ai/chat', async (request, response) => {
   });
   nextHistoryId += 1;
 
-  response.json({ ok: true, board, diff, history, message: assistantMessage, toolCalls: appliedToolCalls });
+  response.json({ ok: true, board, diff, history, message: assistantMessage, reasoningContent: assistantReasoningContent, toolCalls: appliedToolCalls });
 });
 
 app.post('/api/ai/turn', (_request, response) => {
@@ -426,7 +433,11 @@ async function summarizeCommittedChange(change: CommitContext, currentBoard: Boa
   }
 }
 
-async function planBoardEditWithTools(instruction: string, currentBoard: Board) {
+async function planBoardEditWithTools(
+  instruction: string,
+  currentBoard: Board,
+  chatHistory: Array<{ role: 'user' | 'assistant'; content: string; reasoningContent?: string }>,
+) {
   if (!process.env.CEREBRAS_API_KEY) {
     const fallback = fallbackChatEdit(instruction, currentBoard.elements);
     return {
@@ -441,26 +452,37 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
   const messages: Array<
     | { role: 'system'; content: string }
     | { role: 'user'; content: string }
-    | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
+    | { role: 'assistant'; content: string | null; reasoning?: string; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
     | { role: 'tool'; tool_call_id: string; content: string }
   > = [
     {
       role: 'system',
       content:
-        'You are Glyph, a whiteboard editing partner. Use tool calls to directly implement the user request on the whiteboard graph. Prefer a small, complete set of changes. Use existing element IDs for updates and deletes. When creating connected diagrams, create boxes first, then lines anchored to their sides. Use coordinates that keep content readable on a 1600 by 1000 canvas. After tool calls are complete, reply with one short sentence.',
+        'You are Glyph, a whiteboard editing partner. This is a real multi-turn chat, so use the transcript to resolve follow-ups, confirmations, and references like "do it" or "that plan". Use tool calls to directly implement the user request on the whiteboard graph when the user asks you to proceed. Prefer a small, complete set of changes. Use existing element IDs for updates and deletes. When creating connected diagrams, create boxes first, then lines anchored to their sides. Use coordinates that keep content readable on a 1600 by 1000 canvas. After tool calls are complete, reply with one short sentence.',
     },
     {
       role: 'user',
-      content: `Current whiteboard JSON:\n${JSON.stringify(currentBoard.elements, null, 2)}\n\nUser request:\n${instruction}`,
+      content: `Current whiteboard JSON:\n${JSON.stringify(currentBoard.elements, null, 2)}`,
+    },
+    ...chatHistory.map((message) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.role === 'assistant' && message.reasoningContent ? { reasoning: message.reasoningContent } : {}),
+    })),
+    {
+      role: 'user',
+      content: instruction,
     },
   ];
 
   let finalMessage = 'Applied the requested whiteboard edit.';
+  const allReasoningContent: string[] = [];
 
   for (let step = 0; step < 8; step += 1) {
     const result = await requestCerebrasChat({
         model: 'gemma-4-31b',
         temperature: 0.2,
+        reasoning_effort: 'low',
         messages,
         tools: toolDefinitions,
         tool_choice: 'auto',
@@ -470,10 +492,15 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
       throw new Error('Cerebras response did not include a message');
     }
 
+    if (message.reasoning) {
+      allReasoningContent.push(message.reasoning);
+    }
+
     const toolCalls = message.tool_calls ?? [];
     messages.push({
       role: 'assistant',
       content: message.content ?? null,
+      ...(message.reasoning ? { reasoning: message.reasoning } : {}),
       tool_calls: toolCalls.map((toolCall, index) => ({
         id: toolCall.id ?? `tool-${step}-${index}`,
         type: 'function' as const,
@@ -524,7 +551,7 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
     }
   }
 
-  return { elements: workingElements, message: finalMessage, toolCalls: appliedToolCalls };
+  return { elements: workingElements, message: finalMessage, reasoningContent: allReasoningContent.length > 0 ? allReasoningContent.join('\n') : undefined, toolCalls: appliedToolCalls };
 }
 
 function parseToolArguments(value: string) {
@@ -558,13 +585,15 @@ async function requestCerebrasChat(payload: unknown) {
           message?: {
             content?: string | null;
             tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+            reasoning?: string;
           };
         }>;
       };
     }
 
     if (response.status < 500 || response.status >= 600 || attempt === maxRetries) {
-      throw new Error(`Cerebras request failed with ${response.status}`);
+      const body = await response.text();
+      throw new Error(`Cerebras request failed with ${response.status}: ${body.slice(0, 200)}`);
     }
 
     await delay(1000);

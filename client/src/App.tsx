@@ -106,7 +106,7 @@ type Board = { elements: WhiteboardElement[]; updatedAt: string }
 type Tool = 'select' | 'line' | 'box' | 'text' | 'image' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
 type HistoryPoint = { board: Board; historyId: number | null }
-type ChatMessage = { role: 'user' | 'assistant'; content: string }
+type ChatMessage = { role: 'user' | 'assistant'; content: string; reasoningContent?: string }
 type GraphDiff = { added: number[]; removed: number[]; updated: number[] }
 type Draft = { tool: 'line' | 'box' | 'image'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
@@ -152,6 +152,7 @@ function App() {
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
   const [generatingImageIds, setGeneratingImageIds] = useState<Set<number>>(() => new Set())
+  const [expandedReasoningIdxs, setExpandedReasoningIdxs] = useState<Set<number>>(() => new Set())
   const chatLogRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
@@ -763,7 +764,7 @@ function App() {
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, discardHistoryAfterId: beforeHistoryId }),
+        body: JSON.stringify({ message, chatHistory: chatMessages, discardHistoryAfterId: beforeHistoryId }),
       })
       const result = (await response.json()) as {
         ok?: boolean
@@ -772,6 +773,7 @@ function App() {
         history?: HistoryEntry[]
         diff?: GraphDiff
         message?: string
+        reasoningContent?: string
       }
 
       if (!response.ok || !result.board || !result.history || !result.diff) {
@@ -793,7 +795,7 @@ function App() {
       setCurrentHistoryId(latestHistoryId)
       currentHistoryIdRef.current = latestHistoryId
       setSelectedId((current) => result.board?.elements.some((element) => element.id === current) ? current : null)
-      setChatMessages((current) => [...current, { role: 'assistant', content: result.message ?? (changed ? 'Updated the whiteboard.' : 'No board changes were needed.') }])
+      setChatMessages((current) => [...current, { role: 'assistant', content: result.message ?? (changed ? 'Updated the whiteboard.' : 'No board changes were needed.'), reasoningContent: result.reasoningContent }])
     } catch (error) {
       setChatMessages((current) => [...current, { role: 'assistant', content: error instanceof Error ? error.message : 'AI edit failed' }])
     } finally {
@@ -991,11 +993,47 @@ function App() {
           <Typography variant="overline">Chat</Typography>
           <Stack spacing={1} className="chat-panel">
             <Stack spacing={0.75} className="chat-log" ref={chatLogRef}>
-              {chatMessages.map((message, index) => (
+              {chatMessages.map((message, index) => {
+                const reasoningOpen = expandedReasoningIdxs.has(index)
+                return (
                 <Box key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+                  {message.role === 'assistant' && message.reasoningContent && (
+                    <>
+                      <Box
+                        component="button"
+                        onClick={() => setExpandedReasoningIdxs((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(index)) next.delete(index)
+                          else next.add(index)
+                          return next
+                        })}
+                        sx={{
+                          display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5,
+                          border: 'none', background: 'none', color: 'text.secondary',
+                          fontSize: '0.7rem', cursor: 'pointer', p: 0, opacity: 0.7,
+                          '&:hover': { opacity: 1 },
+                        }}
+                      >
+                        <ChevronDown
+                          size={12}
+                          style={{
+                            transform: reasoningOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+                            transition: 'transform 0.15s',
+                          }}
+                        />
+                        Thinking
+                      </Box>
+                      <Collapse in={reasoningOpen}>
+                        <Typography variant="caption" sx={{ display: 'block', mb: 0.75, color: 'text.secondary', fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>
+                          {message.reasoningContent}
+                        </Typography>
+                      </Collapse>
+                    </>
+                  )}
                   <Typography variant="body2">{message.content}</Typography>
                 </Box>
-              ))}
+                )
+              })}
               {chatBusy && (
                 <Box className="chat-message assistant">
                   <Typography variant="body2">Working...</Typography>
