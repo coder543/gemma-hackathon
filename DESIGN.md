@@ -108,6 +108,7 @@ Each execution validates the resulting graph against the shared board schema and
 The first implementation includes:
 
 - SVG whiteboard surface.
+- Zoom controls for changing the visible board scale without changing graph coordinates.
 - Draw box, line, and text.
 - Select, drag, inspect, edit, erase, and clear.
 - Backspace/Delete removes the selected element when focus is not in an editor or input.

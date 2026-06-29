@@ -34,6 +34,8 @@ import {
   Trash2,
   Type,
   Undo2,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import './App.css'
 
@@ -117,6 +119,11 @@ type InlineEdit = { id: number; value: string }
 const defaultBoard: Board = { elements: [], updatedAt: new Date().toISOString() }
 const colors = ['#1f2937', '#2563eb', '#e11d48', '#16a34a', '#f59e0b']
 const anchorSnapDistance = 28
+const boardWidth = 1600
+const boardHeight = 1000
+const minZoom = 0.5
+const maxZoom = 2
+const zoomStep = 0.1
 
 function App() {
   const [board, setBoard] = useState<Board>(defaultBoard)
@@ -139,6 +146,7 @@ function App() {
   const [llmStateOpen, setLlmStateOpen] = useState(false)
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
+  const [boardZoom, setBoardZoom] = useState(1)
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
@@ -236,20 +244,17 @@ function App() {
   )
 
   const pointFromSvgEvent = (event: PointerEvent<SVGSVGElement>): Point => {
-    const rect = event.currentTarget.getBoundingClientRect()
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    return svgPointFromClient(event.currentTarget, event.clientX, event.clientY)
   }
 
   const pointFromElementEvent = (event: PointerEvent<SVGGElement>): Point => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const svg = event.currentTarget.ownerSVGElement
+    return svg ? svgPointFromClient(svg, event.clientX, event.clientY) : { x: 0, y: 0 }
   }
 
   const pointFromOwnedSvgEvent = (event: PointerEvent<SVGElement>): Point => {
-    const rect = event.currentTarget.ownerSVGElement?.getBoundingClientRect()
-    if (!rect) return { x: 0, y: 0 }
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const svg = event.currentTarget.ownerSVGElement
+    return svg ? svgPointFromClient(svg, event.clientX, event.clientY) : { x: 0, y: 0 }
   }
 
   const commitSelectedPatch = (patch: Partial<WhiteboardElement>) => {
@@ -259,6 +264,10 @@ function App() {
         element.id === selectedId ? ({ ...element, ...patch } as WhiteboardElement) : element,
       ),
     )
+  }
+
+  const zoomBoard = (direction: -1 | 1) => {
+    setBoardZoom((current) => clampZoom(current + direction * zoomStep))
   }
 
   const deleteSelectedElement = useCallback(() => {
@@ -758,6 +767,23 @@ function App() {
           <Tooltip title="Capture board screenshot">
             <IconButton onClick={captureScreenshot}><Camera size={18} /></IconButton>
           </Tooltip>
+          <ButtonGroup size="small" variant="outlined">
+            <Tooltip title="Zoom out">
+              <span>
+                <IconButton onClick={() => zoomBoard(-1)} disabled={boardZoom <= minZoom}>
+                  <ZoomOut size={18} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Typography className="zoom-readout" variant="caption">{Math.round(boardZoom * 100)}%</Typography>
+            <Tooltip title="Zoom in">
+              <span>
+                <IconButton onClick={() => zoomBoard(1)} disabled={boardZoom >= maxZoom}>
+                  <ZoomIn size={18} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </ButtonGroup>
           <Tooltip title="Undo">
             <span>
               <IconButton onClick={undoBoard} disabled={undoDepth === 0}><Undo2 size={18} /></IconButton>
@@ -848,6 +874,8 @@ function App() {
         <Box className="board-wrap" ref={boardRef}>
           <svg
             className="board"
+            viewBox={`0 0 ${boardWidth} ${boardHeight}`}
+            style={{ width: boardWidth * boardZoom, height: boardHeight * boardZoom }}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -991,6 +1019,20 @@ function boardChanged(before: Board, after: Board) {
 
 function elementsChanged(before: WhiteboardElement[], after: WhiteboardElement[]) {
   return JSON.stringify(before) !== JSON.stringify(after)
+}
+
+function clampZoom(value: number) {
+  return Math.min(maxZoom, Math.max(minZoom, Number(value.toFixed(2))))
+}
+
+function svgPointFromClient(svg: SVGSVGElement, clientX: number, clientY: number): Point {
+  const point = svg.createSVGPoint()
+  point.x = clientX
+  point.y = clientY
+  const matrix = svg.getScreenCTM()
+  if (!matrix) return { x: 0, y: 0 }
+  const transformed = point.matrixTransform(matrix.inverse())
+  return { x: transformed.x, y: transformed.y }
 }
 
 function isEditableEventTarget(target: EventTarget | null) {
