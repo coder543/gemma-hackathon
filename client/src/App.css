@@ -226,6 +226,11 @@
   overflow-wrap: anywhere;
 }
 
+.text-hit-area {
+  fill: transparent;
+  pointer-events: all;
+}
+
 .board .element .line-label,
 .board .element .image-label {
   fill: var(--board-text);

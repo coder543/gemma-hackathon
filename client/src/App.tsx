@@ -1583,6 +1583,7 @@ function ElementView({
   }
   return (
     <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
+      <rect className="text-hit-area" x={element.x} y={element.y} width={element.width} height={elementHeight(element)} rx="4" />
       {!editing && (
         <foreignObject className="text-foreign-object" x={element.x} y={element.y} width={element.width} height={elementHeight(element)}>
           <div className="text-node" style={{ color: themedStroke(element.style?.stroke, 'var(--canvas-node-text)'), fontSize: element.style?.fontSize }}>{element.text}</div>

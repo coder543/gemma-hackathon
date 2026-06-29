@@ -120,6 +120,7 @@ The first implementation includes:
 - Side anchoring when drawing lines from or to boxes and image boxes.
 - Local drag/edit previews with backend commits only when the interaction is complete.
 - Resizable boxes and floating text objects.
+- Floating text uses an invisible SVG hit target behind the rendered text so it can be selected, dragged, resized, and double-clicked even though the displayed text is rendered inside a non-interactive `foreignObject`.
 - Independent line endpoint dragging, including anchoring by dropping an endpoint on a box or image edge.
 - Undo and redo for committed board states.
 - Cloud boxes rendered as cloud-shaped paths.
