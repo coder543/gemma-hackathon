@@ -19,7 +19,6 @@ import {
   Typography,
 } from '@mui/material'
 import {
-  Camera,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -139,7 +138,6 @@ function App() {
   const [resize, setResize] = useState<Resize | null>(null)
   const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null)
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null)
-  const [screenshot, setScreenshot] = useState<string | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
@@ -151,7 +149,6 @@ function App() {
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
   const [generatingImageIds, setGeneratingImageIds] = useState<Set<number>>(() => new Set())
-  const boardRef = useRef<HTMLDivElement | null>(null)
   const chatLogRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
@@ -184,12 +181,12 @@ function App() {
       beforeScreenshotRef.current = null
       return
     }
-    const beforeScreenshot = beforeScreenshotRef.current ? await beforeScreenshotRef.current : await captureBoardScreenshot(boardRef.current)
+    const beforeScreenshot = beforeScreenshotRef.current ? await beforeScreenshotRef.current : await captureBoardScreenshot(beforeBoard.elements)
     beforeScreenshotRef.current = null
     const nextBoard = { elements, updatedAt: new Date().toISOString() }
     setBoard(nextBoard)
     await nextPaint()
-    const afterScreenshot = await captureBoardScreenshot(boardRef.current)
+    const afterScreenshot = await captureBoardScreenshot(nextBoard.elements)
     const response = await fetch('/api/board', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -565,11 +562,6 @@ function App() {
     beforeScreenshotRef.current = null
   }
 
-  const captureScreenshot = async () => {
-    if (!boardRef.current) return
-    setScreenshot(await captureBoardScreenshot(boardRef.current))
-  }
-
   const undoBoard = () => {
     const previous = undoStackRef.current.pop()
     if (!previous) return
@@ -591,7 +583,7 @@ function App() {
   }
 
   const captureBeforeSnapshot = () => {
-    beforeScreenshotRef.current = captureBoardScreenshot(boardRef.current)
+    beforeScreenshotRef.current = captureBoardScreenshot(lastCommittedBoardRef.current.elements)
   }
 
   const createImageElement = async (description: string, frame: { x: number; y: number; width: number; height: number }) => {
@@ -764,9 +756,6 @@ function App() {
               </Tooltip>
             ))}
           </ButtonGroup>
-          <Tooltip title="Capture board screenshot">
-            <IconButton onClick={captureScreenshot}><Camera size={18} /></IconButton>
-          </Tooltip>
           <ButtonGroup size="small" variant="outlined">
             <Tooltip title="Zoom out">
               <span>
@@ -871,7 +860,7 @@ function App() {
           </Box>
         )}
 
-        <Box className="board-wrap" ref={boardRef}>
+        <Box className="board-wrap">
           <svg
             className="board"
             viewBox={`0 0 ${boardWidth} ${boardHeight}`}
@@ -981,7 +970,6 @@ function App() {
           <Collapse in={llmStateOpen} timeout="auto" unmountOnExit>
             <pre className="json-preview">{JSON.stringify(board.elements, null, 2)}</pre>
           </Collapse>
-          {screenshot && <img className="screenshot-preview" src={screenshot} alt="Latest whiteboard screenshot" />}
         </Paper>
         ) : (
           <Box className="sidebar-rail right-rail">
@@ -1001,9 +989,27 @@ function editableText(element: Exclude<WhiteboardElement, ImageElement>) {
   return element.type === 'text' ? element.text : (element.label ?? '')
 }
 
-async function captureBoardScreenshot(element: HTMLElement | null) {
-  if (!element) return null
-  const canvas = await html2canvas(element, { backgroundColor: '#f8fafc', scale: 0.6 })
+async function captureBoardScreenshot(elements: WhiteboardElement[]) {
+  const bounds = populatedBoardBounds(elements)
+  const container = document.createElement('div')
+  container.style.position = 'fixed'
+  container.style.left = '-10000px'
+  container.style.top = '0'
+  container.style.width = `${bounds.width}px`
+  container.style.height = `${bounds.height}px`
+  container.style.overflow = 'hidden'
+  container.style.background = '#f8fafc'
+  container.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${bounds.width}" height="${bounds.height}" viewBox="${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}" class="board screenshot-board">
+    <defs>
+      <marker id="screenshot-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
+      </marker>
+    </defs>
+    ${elements.map((element) => screenshotElementSvg(element, elements)).join('')}
+  </svg>`
+  document.body.appendChild(container)
+  const canvas = await html2canvas(container, { backgroundColor: '#f8fafc', scale: 0.8 })
+  document.body.removeChild(container)
   return canvas.toDataURL('image/png')
 }
 
@@ -1055,6 +1061,84 @@ function svgParseError(svg: string) {
 
 function svgDataUrl(svg: string) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+function populatedBoardBounds(elements: WhiteboardElement[]) {
+  if (elements.length === 0) {
+    return { x: 0, y: 0, width: 640, height: 400 }
+  }
+
+  const padding = 48
+  const boxes = elements.map((element) => elementBounds(element, elements))
+  const minX = Math.min(...boxes.map((bounds) => bounds.x))
+  const minY = Math.min(...boxes.map((bounds) => bounds.y))
+  const maxX = Math.max(...boxes.map((bounds) => bounds.x + bounds.width))
+  const maxY = Math.max(...boxes.map((bounds) => bounds.y + bounds.height))
+  const x = Math.max(0, minX - padding)
+  const y = Math.max(0, minY - padding)
+  return {
+    x,
+    y,
+    width: Math.max(240, maxX - x + padding),
+    height: Math.max(180, maxY - y + padding),
+  }
+}
+
+function elementBounds(element: WhiteboardElement, elements: WhiteboardElement[]) {
+  if (element.type === 'line') {
+    const points = linePoints(element, elements)
+    const minX = Math.min(points.start.x, points.end.x)
+    const minY = Math.min(points.start.y, points.end.y)
+    const maxX = Math.max(points.start.x, points.end.x)
+    const maxY = Math.max(points.start.y, points.end.y)
+    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
+  }
+  return { x: element.x, y: element.y, width: element.width, height: elementHeight(element) }
+}
+
+function screenshotElementSvg(element: WhiteboardElement, elements: WhiteboardElement[]) {
+  const style = 'style' in element ? element.style : undefined
+  const stroke = escapeXml(style?.stroke ?? '#1f2937')
+  const strokeWidth = style?.strokeWidth ?? 2
+
+  if (element.type === 'box') {
+    const fill = escapeXml(element.style?.fill ?? '#ffffff')
+    const label = element.label ? screenshotText(element.label, element.x + element.width / 2, element.y + element.height / 2, element.width - 16) : ''
+    if (element.shape === 'cloud') {
+      return `<path d="${cloudPath(element.x, element.y, element.width, element.height)}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>${label}`
+    }
+    if (element.shape === 'oval') {
+      return `<ellipse cx="${element.x + element.width / 2}" cy="${element.y + element.height / 2}" rx="${element.width / 2}" ry="${element.height / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>${label}`
+    }
+    return `<rect x="${element.x}" y="${element.y}" width="${element.width}" height="${element.height}" rx="4" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"/>${label}`
+  }
+
+  if (element.type === 'line') {
+    const points = linePoints(element, elements)
+    const label = element.label ? screenshotText(element.label, (points.start.x + points.end.x) / 2, (points.start.y + points.end.y) / 2 - 8, 160, 14) : ''
+    const markerEnd = element.lineStyle === 'arrow' || element.lineStyle === 'doubleArrow' ? ' marker-end="url(#screenshot-arrow)"' : ''
+    const markerStart = element.lineStyle === 'doubleArrow' ? ' marker-start="url(#screenshot-arrow)"' : ''
+    return `<line x1="${points.start.x}" y1="${points.start.y}" x2="${points.end.x}" y2="${points.end.y}" stroke="${stroke}" stroke-width="${strokeWidth}"${markerStart}${markerEnd}/>${label}`
+  }
+
+  if (element.type === 'text') {
+    return `<foreignObject x="${element.x}" y="${element.y}" width="${element.width}" height="${elementHeight(element)}"><div xmlns="http://www.w3.org/1999/xhtml" class="text-node">${escapeXml(element.text)}</div></foreignObject>`
+  }
+
+  return `<foreignObject x="${element.x}" y="${element.y}" width="${element.width}" height="${element.height}"><img xmlns="http://www.w3.org/1999/xhtml" class="image-node" src="${escapeXml(svgDataUrl(element.svg))}" style="width:100%;height:100%;object-fit:contain;"/></foreignObject>`
+}
+
+function screenshotText(text: string, x: number, y: number, width: number, fontSize = 16) {
+  return `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${fontSize}" fill="#111827">${escapeXml(text.slice(0, Math.max(12, Math.floor(width / 7))))}</text>`
+}
+
+function escapeXml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
 }
 
 function fitFrameToSvg(frame: { width: number; height: number }, svg: string) {

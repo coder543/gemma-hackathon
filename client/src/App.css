@@ -296,12 +296,6 @@
   line-height: 1.45;
 }
 
-.screenshot-preview {
-  width: 100%;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-}
-
 @media (max-width: 1100px) {
   .workspace {
     grid-template-columns: 220px minmax(420px, 1fr);

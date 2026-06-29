@@ -56,7 +56,7 @@ Boxes, floating text, and image boxes are resizable. Box labels and floating tex
 - Persistence: in-memory for the prototype, replaceable with file or database storage.
 - AI proxy: backend endpoint will call Cerebras with `CEREBRAS_API_KEY`.
 - LLM requests retry transient Cerebras 5xx responses after a 1 second delay, up to 3 retries.
-- Multimodal context: frontend captures a board screenshot with `html2canvas` and sends it with serialized graph state.
+- Multimodal context: frontend captures a cropped populated-board screenshot with `html2canvas` and sends it with serialized graph state.
 
 ## Interactive AI
 
@@ -125,7 +125,7 @@ The first implementation includes:
 - In-memory backend persistence.
 - Left-sidebar history list with AI-generated 2 to 5 word commit descriptions.
 - Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
-- Collapsed JSON state preview and screenshot capture.
+- Collapsed JSON state preview.
 - Independently collapsible left and right sidebars so the board can use more space.
 
 ## History Summary Request
@@ -134,7 +134,9 @@ Each committed board edit sends the backend:
 
 - Serialized board state before the edit.
 - Serialized board state after the edit.
-- Browser screenshot before the edit.
-- Browser screenshot after the edit.
+- Browser screenshot before the edit, cropped to the populated board area.
+- Browser screenshot after the edit, cropped to the populated board area.
+
+When the board is truly empty, the frontend sends a default blank board screenshot instead of a viewport capture.
 
 The backend asks `gemma-4-31b` through Cerebras for a 2 to 5 word change description. If the model request fails, the app falls back to a deterministic short label so whiteboard commits still succeed.
