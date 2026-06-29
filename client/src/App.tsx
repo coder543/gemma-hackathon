@@ -21,6 +21,7 @@ import {
 import {
   Camera,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Eraser,
   ImagePlus,
@@ -136,6 +137,8 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
   const [llmStateOpen, setLlmStateOpen] = useState(false)
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
@@ -771,8 +774,17 @@ function App() {
         </Stack>
       </Paper>
 
-      <Box className="workspace">
+      <Box className={`workspace ${leftSidebarOpen ? '' : 'left-collapsed'} ${rightSidebarOpen ? '' : 'right-collapsed'}`}>
+        {leftSidebarOpen ? (
         <Paper className="left-panel" elevation={0}>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="overline">Controls</Typography>
+            <Tooltip title="Collapse left sidebar">
+              <IconButton size="small" onClick={() => setLeftSidebarOpen(false)}>
+                <ChevronLeft size={16} />
+              </IconButton>
+            </Tooltip>
+          </Stack>
           {(tool === 'box' || tool === 'line') && (
             <>
               <Typography variant="overline">Tool Options</Typography>
@@ -823,6 +835,15 @@ function App() {
             ))}
           </Stack>
         </Paper>
+        ) : (
+          <Box className="sidebar-rail left-rail">
+            <Tooltip title="Expand left sidebar">
+              <IconButton size="small" onClick={() => setLeftSidebarOpen(true)}>
+                <ChevronRight size={16} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
 
         <Box className="board-wrap" ref={boardRef}>
           <svg
@@ -871,7 +892,16 @@ function App() {
           </svg>
         </Box>
 
+        {rightSidebarOpen ? (
         <Paper className="right-panel" elevation={0}>
+          <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="overline">AI</Typography>
+            <Tooltip title="Collapse right sidebar">
+              <IconButton size="small" onClick={() => setRightSidebarOpen(false)}>
+                <ChevronRight size={16} />
+              </IconButton>
+            </Tooltip>
+          </Stack>
           <Typography variant="overline">Chat</Typography>
           <Stack spacing={1} className="chat-panel">
             <Stack spacing={0.75} className="chat-log" ref={chatLogRef}>
@@ -925,6 +955,15 @@ function App() {
           </Collapse>
           {screenshot && <img className="screenshot-preview" src={screenshot} alt="Latest whiteboard screenshot" />}
         </Paper>
+        ) : (
+          <Box className="sidebar-rail right-rail">
+            <Tooltip title="Expand right sidebar">
+              <IconButton size="small" onClick={() => setRightSidebarOpen(true)}>
+                <ChevronLeft size={16} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
     </Box>
   )

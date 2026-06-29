@@ -125,6 +125,7 @@ The first implementation includes:
 - Left-sidebar history list with AI-generated 2 to 5 word commit descriptions.
 - Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
 - Collapsed JSON state preview and screenshot capture.
+- Independently collapsible left and right sidebars so the board can use more space.
 
 ## History Summary Request
 

@@ -49,6 +49,18 @@
   overflow: hidden;
 }
 
+.workspace.left-collapsed {
+  grid-template-columns: 42px minmax(480px, 1fr) 340px;
+}
+
+.workspace.right-collapsed {
+  grid-template-columns: 280px minmax(480px, 1fr) 42px;
+}
+
+.workspace.left-collapsed.right-collapsed {
+  grid-template-columns: 42px minmax(480px, 1fr) 42px;
+}
+
 .left-panel,
 .right-panel {
   border-radius: 0;
@@ -65,6 +77,21 @@
   border-left: 1px solid #d8dee8;
   border-right: 0;
   overflow: hidden;
+}
+
+.sidebar-rail {
+  background: #fbfcfe;
+  display: flex;
+  justify-content: center;
+  padding-top: 14px;
+}
+
+.left-rail {
+  border-right: 1px solid #d8dee8;
+}
+
+.right-rail {
+  border-left: 1px solid #d8dee8;
 }
 
 .board-wrap {
