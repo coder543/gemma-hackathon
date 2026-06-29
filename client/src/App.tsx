@@ -5,6 +5,7 @@ import {
   Box,
   Button,
   ButtonGroup,
+  Collapse,
   Divider,
   FormControl,
   IconButton,
@@ -19,6 +20,8 @@ import {
 } from '@mui/material'
 import {
   Camera,
+  ChevronDown,
+  ChevronRight,
   Eraser,
   ImagePlus,
   MousePointer2,
@@ -132,11 +135,13 @@ function App() {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatBusy, setChatBusy] = useState(false)
+  const [llmStateOpen, setLlmStateOpen] = useState(false)
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
   const [generatingImageIds, setGeneratingImageIds] = useState<Set<number>>(() => new Set())
   const boardRef = useRef<HTMLDivElement | null>(null)
+  const chatLogRef = useRef<HTMLDivElement | null>(null)
   const lastCommittedBoardRef = useRef<Board>(defaultBoard)
   const beforeScreenshotRef = useRef<Promise<string | null> | null>(null)
   const undoStackRef = useRef<HistoryPoint[]>([])
@@ -252,6 +257,36 @@ function App() {
       ),
     )
   }
+
+  const deleteSelectedElement = useCallback(() => {
+    if (selectedId === null) return
+    const element = board.elements.find((candidate) => candidate.id === selectedId)
+    if (!element) return
+    captureBeforeSnapshot()
+    void commitBoard(board.elements.filter((candidate) => candidate.id !== selectedId))
+    setSelectedId(null)
+    setInlineEdit(null)
+  }, [board.elements, commitBoard, selectedId])
+
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Backspace' && event.key !== 'Delete') return
+      if (inlineEdit) return
+      const target = event.target
+      if (isEditableEventTarget(target)) return
+      if (selectedId === null) return
+      event.preventDefault()
+      deleteSelectedElement()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [deleteSelectedElement, inlineEdit, selectedId])
+
+  useEffect(() => {
+    if (!chatLogRef.current) return
+    chatLogRef.current.scrollTop = chatLogRef.current.scrollHeight
+  }, [chatMessages, chatBusy])
 
   const startLineDraft = (point: Point, startAnchor?: Anchor, svg?: SVGSVGElement | null, pointerId?: number) => {
     captureBeforeSnapshot()
@@ -738,24 +773,32 @@ function App() {
 
       <Box className="workspace">
         <Paper className="left-panel" elevation={0}>
-          <Typography variant="overline">Tool Options</Typography>
-          <FormControl size="small" fullWidth>
-            <InputLabel>Box</InputLabel>
-            <Select label="Box" value={boxShape} onChange={(event) => setBoxShape(event.target.value as BoxElement['shape'])}>
-              <MenuItem value="rectangle">Rectangle</MenuItem>
-              <MenuItem value="oval">Oval</MenuItem>
-              <MenuItem value="cloud">Cloud</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl size="small" fullWidth>
-            <InputLabel>Line</InputLabel>
-            <Select label="Line" value={lineStyle} onChange={(event) => setLineStyle(event.target.value as LineElement['lineStyle'])}>
-              <MenuItem value="plain">Plain</MenuItem>
-              <MenuItem value="arrow">Arrow</MenuItem>
-              <MenuItem value="doubleArrow">Double arrow</MenuItem>
-            </Select>
-          </FormControl>
-          <Divider />
+          {(tool === 'box' || tool === 'line') && (
+            <>
+              <Typography variant="overline">Tool Options</Typography>
+              {tool === 'box' && (
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Box</InputLabel>
+                  <Select label="Box" value={boxShape} onChange={(event) => setBoxShape(event.target.value as BoxElement['shape'])}>
+                    <MenuItem value="rectangle">Rectangle</MenuItem>
+                    <MenuItem value="oval">Oval</MenuItem>
+                    <MenuItem value="cloud">Cloud</MenuItem>
+                  </Select>
+                </FormControl>
+              )}
+              {tool === 'line' && (
+                <FormControl size="small" fullWidth>
+                  <InputLabel>Line</InputLabel>
+                  <Select label="Line" value={lineStyle} onChange={(event) => setLineStyle(event.target.value as LineElement['lineStyle'])}>
+                    <MenuItem value="plain">Plain</MenuItem>
+                    <MenuItem value="arrow">Arrow</MenuItem>
+                    <MenuItem value="doubleArrow">Double arrow</MenuItem>
+                  </Select>
+                </FormControl>
+              )}
+              <Divider />
+            </>
+          )}
           <Typography variant="overline">Selected</Typography>
           {selected ? (
             <Inspector
@@ -831,7 +874,7 @@ function App() {
           <Divider />
           <Typography variant="overline">Chat</Typography>
           <Stack spacing={1} className="chat-panel">
-            <Stack spacing={0.75} className="chat-log">
+            <Stack spacing={0.75} className="chat-log" ref={chatLogRef}>
               {chatMessages.map((message, index) => (
                 <Box key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
                   <Typography variant="body2">{message.content}</Typography>
@@ -868,8 +911,18 @@ function App() {
             </Stack>
           </Stack>
           <Divider />
-          <Typography variant="overline">LLM State</Typography>
-          <pre className="json-preview">{JSON.stringify(board.elements, null, 2)}</pre>
+          <Button
+            className="llm-state-toggle"
+            size="small"
+            variant="text"
+            startIcon={llmStateOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            onClick={() => setLlmStateOpen((current) => !current)}
+          >
+            LLM State
+          </Button>
+          <Collapse in={llmStateOpen} timeout="auto" unmountOnExit>
+            <pre className="json-preview">{JSON.stringify(board.elements, null, 2)}</pre>
+          </Collapse>
           {screenshot && <img className="screenshot-preview" src={screenshot} alt="Latest whiteboard screenshot" />}
         </Paper>
       </Box>
@@ -899,6 +952,12 @@ function boardChanged(before: Board, after: Board) {
 
 function elementsChanged(before: WhiteboardElement[], after: WhiteboardElement[]) {
   return JSON.stringify(before) !== JSON.stringify(after)
+}
+
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
 function svgParseError(svg: string) {
@@ -1140,6 +1199,14 @@ function Inspector({
     onCommit({ [field]: value } as Partial<WhiteboardElement>)
   }
 
+  const commitSelect = (field: string, value: string) => {
+    const initial = inspectorValues(element)
+    setValues({ ...values, [field]: value })
+    if (value === initial[field]) return
+    onBeginEdit()
+    onCommit({ [field]: value } as Partial<WhiteboardElement>)
+  }
+
   const blurOnEnter = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== 'Enter') return
     event.currentTarget.blur()
@@ -1148,6 +1215,14 @@ function Inspector({
   if (element.type === 'box') {
     return (
       <Stack spacing={1.5}>
+        <FormControl size="small" fullWidth>
+          <InputLabel>Shape</InputLabel>
+          <Select label="Shape" value={values.shape} onChange={(event) => commitSelect('shape', event.target.value)}>
+            <MenuItem value="rectangle">Rectangle</MenuItem>
+            <MenuItem value="oval">Oval</MenuItem>
+            <MenuItem value="cloud">Cloud</MenuItem>
+          </Select>
+        </FormControl>
         <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
         <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
         <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
@@ -1183,6 +1258,14 @@ function Inspector({
   }
   return (
     <Stack spacing={1.5}>
+      <FormControl size="small" fullWidth>
+        <InputLabel>Line</InputLabel>
+        <Select label="Line" value={values.lineStyle} onChange={(event) => commitSelect('lineStyle', event.target.value)}>
+          <MenuItem value="plain">Plain</MenuItem>
+          <MenuItem value="arrow">Arrow</MenuItem>
+          <MenuItem value="doubleArrow">Double arrow</MenuItem>
+        </Select>
+      </FormControl>
       <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
       <Typography variant="caption" color="text.secondary">Double-click the line label to edit inline. Anchored endpoints follow their boxes.</Typography>
     </Stack>
@@ -1191,7 +1274,7 @@ function Inspector({
 
 function inspectorValues(element: WhiteboardElement): Record<string, string> {
   if (element.type === 'box') {
-    return { label: element.label ?? '', width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
+    return { shape: element.shape, label: element.label ?? '', width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
   }
   if (element.type === 'text') {
     return { text: element.text, width: String(Math.round(element.width)), height: String(Math.round(elementHeight(element))) }
@@ -1199,7 +1282,7 @@ function inspectorValues(element: WhiteboardElement): Record<string, string> {
   if (element.type === 'image') {
     return { description: element.description, width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
   }
-  return { label: element.label ?? '' }
+  return { lineStyle: element.lineStyle, label: element.label ?? '' }
 }
 
 function ElementView({

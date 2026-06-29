@@ -55,6 +55,7 @@ Boxes, floating text, and image boxes are resizable. Box labels and floating tex
 - Backend: minimal TypeScript Express service.
 - Persistence: in-memory for the prototype, replaceable with file or database storage.
 - AI proxy: backend endpoint will call Cerebras with `CEREBRAS_API_KEY`.
+- LLM requests retry transient Cerebras 5xx responses after a 1 second delay, up to 3 retries.
 - Multimodal context: frontend captures a board screenshot with `html2canvas` and sends it with serialized graph state.
 
 ## Interactive AI
@@ -109,7 +110,9 @@ The first implementation includes:
 - SVG whiteboard surface.
 - Draw box, line, and text.
 - Select, drag, inspect, edit, erase, and clear.
+- Backspace/Delete removes the selected element when focus is not in an editor or input.
 - Double-click inline editing for box labels, line labels, and floating text.
+- Inspector controls can change selected box shape and selected line style after creation.
 - Side anchoring when drawing lines from or to boxes and image boxes.
 - Local drag/edit previews with backend commits only when the interaction is complete.
 - Resizable boxes and floating text objects.
@@ -121,7 +124,7 @@ The first implementation includes:
 - In-memory backend persistence.
 - History list with AI-generated 2 to 5 word commit descriptions.
 - Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
-- JSON state preview and screenshot capture.
+- Collapsed JSON state preview and screenshot capture.
 
 ## History Summary Request
 

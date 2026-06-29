@@ -406,13 +406,7 @@ async function summarizeCommittedChange(change: CommitContext, currentBoard: Boa
   }
 
   try {
-    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const result = await requestCerebrasChat({
         model: 'gemma-4-31b',
         temperature: 0.1,
         max_tokens: 16,
@@ -427,16 +421,7 @@ async function summarizeCommittedChange(change: CommitContext, currentBoard: Boa
             content: commitMessageContent(change),
           },
         ],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Cerebras request failed with ${response.status}`);
-    }
-
-    const result = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
+      });
     const raw = result.choices?.[0]?.message?.content ?? '';
     return normalizeHistoryLabel(raw) || fallbackChangeDescription(change, currentBoard);
   } catch (error) {
@@ -477,34 +462,14 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
   let finalMessage = 'Applied the requested whiteboard edit.';
 
   for (let step = 0; step < 8; step += 1) {
-    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const result = await requestCerebrasChat({
         model: 'gemma-4-31b',
         temperature: 0.2,
         max_tokens: 1200,
         messages,
         tools: toolDefinitions,
         tool_choice: 'auto',
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Cerebras request failed with ${response.status}`);
-    }
-
-    const result = (await response.json()) as {
-      choices?: Array<{
-        message?: {
-          content?: string | null;
-          tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
-        };
-      }>;
-    };
+      });
     const message = result.choices?.[0]?.message;
     if (!message) {
       throw new Error('Cerebras response did not include a message');
@@ -577,6 +542,44 @@ function parseToolArguments(value: string) {
 
 function normalizeAssistantSentence(value: string | null | undefined) {
   return value?.replace(/\s+/g, ' ').trim().slice(0, 240) ?? '';
+}
+
+async function requestCerebrasChat(payload: unknown) {
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as {
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+          };
+        }>;
+      };
+    }
+
+    if (response.status < 500 || response.status >= 600 || attempt === maxRetries) {
+      throw new Error(`Cerebras request failed with ${response.status}`);
+    }
+
+    await delay(1000);
+  }
+
+  throw new Error('Cerebras request failed');
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fallbackChatEdit(instruction: string, elements: WhiteboardElement[]) {
@@ -711,13 +714,7 @@ async function refineImageSvg(payload: z.infer<typeof refineImageSvgSchema>) {
 
 async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
   try {
-    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const result = await requestCerebrasChat({
         model: 'gemma-4-31b',
         temperature: 0.7,
         max_tokens: 2400,
@@ -732,16 +729,7 @@ async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
             content: attempt.content,
           })),
         ],
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Cerebras request failed with ${response.status}`);
-    }
-
-    const result = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
+      });
     return cleanSvgMarkup(result.choices?.[0]?.message?.content ?? '');
   } catch (error) {
     console.warn('SVG generation request failed:', error);

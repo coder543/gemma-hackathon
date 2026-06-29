@@ -19,6 +19,8 @@
 - [x] Show proximity anchor targets while drawing or dragging line endpoints.
 - [x] Add robust resize handles for boxes and text.
 - [x] Add line endpoint editing.
+- [x] Allow selected box shape and line style changes from the inspector.
+- [x] Delete the selected element with Backspace/Delete when focus is not in an editor.
 - [x] Render cloud boxes with a better cloud shape.
 - [x] Add undo/redo.
 - [x] Treat history as a timeline: grey future entries on undo/redo, delete them on a branching edit, and skip AI titles for undo/redo navigation.
@@ -41,6 +43,8 @@
 - [x] Add regenerate/refine controls for AI image boxes.
 - [x] Prompt for AI image descriptions after the user drags the desired frame and fit generated SVG aspect ratios.
 - [x] Add a chat box that turns user requests into model-driven whiteboard tool calls.
+- [x] Retry transient Cerebras 5xx responses automatically.
+- [x] Keep chat history scrolled to the latest user and model messages.
 - [ ] Add more focused interactive AI commands for selected board elements.
 
 ## Deferred: Assistant Loop
