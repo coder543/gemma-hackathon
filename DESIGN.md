@@ -7,7 +7,7 @@ Glyph is a collaborative whiteboard where a very fast AI partner can inspect, ed
 - The user edits one shared whiteboard in the browser.
 - The AI receives both structured board JSON and a browser-captured screenshot.
 - The AI can call tools that mutate the same graph the UI edits.
-- A history sidebar records committed graph changes with natural language summaries.
+- The left sidebar records committed graph changes with natural language summaries.
 - The prototype supports one persistent board with an explicit clear action.
 
 ## Whiteboard Graph
@@ -122,7 +122,7 @@ The first implementation includes:
 - AI-generated SVG image boxes with automatic render-failure repair.
 - Refresh and refine controls for selected AI image boxes.
 - In-memory backend persistence.
-- History list with AI-generated 2 to 5 word commit descriptions.
+- Left-sidebar history list with AI-generated 2 to 5 word commit descriptions.
 - Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
 - Collapsed JSON state preview and screenshot capture.
 

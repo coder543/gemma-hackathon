@@ -810,6 +810,18 @@ function App() {
               onRefineImage={(element) => void updateGeneratedImage(element, 'refine')}
             />
           ) : <Typography color="text.secondary">No element selected.</Typography>}
+          <Divider />
+          <Typography variant="overline">History</Typography>
+          <Stack spacing={1} className="history-list">
+            {history.map((entry) => (
+              <Box key={entry.id} className={currentHistoryId !== null && entry.id > currentHistoryId ? 'history-entry future' : 'history-entry'}>
+                <Typography variant="body2">{entry.description}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {new Date(entry.at).toLocaleTimeString()} - {entry.elementCount} objects
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
         </Paper>
 
         <Box className="board-wrap" ref={boardRef}>
@@ -860,18 +872,6 @@ function App() {
         </Box>
 
         <Paper className="right-panel" elevation={0}>
-          <Typography variant="overline">History</Typography>
-          <Stack spacing={1} className="history-list">
-            {history.map((entry) => (
-              <Box key={entry.id} className={currentHistoryId !== null && entry.id > currentHistoryId ? 'history-entry future' : 'history-entry'}>
-                <Typography variant="body2">{entry.description}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {new Date(entry.at).toLocaleTimeString()} - {entry.elementCount} objects
-                </Typography>
-              </Box>
-            ))}
-          </Stack>
-          <Divider />
           <Typography variant="overline">Chat</Typography>
           <Stack spacing={1} className="chat-panel">
             <Stack spacing={0.75} className="chat-log" ref={chatLogRef}>

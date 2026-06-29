@@ -64,6 +64,7 @@
 .right-panel {
   border-left: 1px solid #d8dee8;
   border-right: 0;
+  overflow: hidden;
 }
 
 .board-wrap {
@@ -197,7 +198,8 @@
 }
 
 .history-list {
-  max-height: 230px;
+  min-height: 120px;
+  max-height: 320px;
   overflow: auto;
 }
 
@@ -215,11 +217,13 @@
 }
 
 .chat-panel {
-  min-height: 170px;
+  flex: 1;
+  min-height: 0;
 }
 
 .chat-log {
-  max-height: 180px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -239,6 +243,12 @@
   align-self: flex-start;
   max-width: 92%;
   background: #f1f5f9;
+}
+
+.llm-state-toggle {
+  align-self: flex-start;
+  min-height: 0 !important;
+  padding: 2px 4px !important;
 }
 
 .json-preview {
