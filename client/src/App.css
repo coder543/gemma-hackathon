@@ -214,6 +214,33 @@
   opacity: 0.6;
 }
 
+.chat-panel {
+  min-height: 170px;
+}
+
+.chat-log {
+  max-height: 180px;
+  overflow: auto;
+}
+
+.chat-message {
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.chat-message.user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: #dbeafe;
+}
+
+.chat-message.assistant {
+  align-self: flex-start;
+  max-width: 92%;
+  background: #f1f5f9;
+}
+
 .json-preview {
   margin: 0;
   max-height: 330px;

@@ -65,6 +65,7 @@ Implemented use cases:
 
 - History summaries: each committed edit sends before/after graph state and screenshots to `gemma-4-31b` for a 2 to 5 word label.
 - AI image boxes: the user drags the desired image frame, describes the image, the backend asks `gemma-4-31b` for standalone SVG, and the browser renders it as a resizable board element.
+- Chat-directed board edits: the user can ask Glyph to change the whiteboard, the backend gives `gemma-4-31b` the current graph plus mutation tools, and the final tool-call result is committed as one board edit.
 
 SVG image generation asks for clean vector composition and at least one subtle declarative animation by default, using native SVG animation or inline CSS keyframes. The image box expands by the minimum amount needed to match the generated SVG aspect ratio. If generated SVG fails browser parsing or loading, the frontend sends the error plus the full prior render-attempt history back to the backend so the model can repair the element. Selected image boxes expose refresh and refine controls for regenerating from the description or applying a follow-up instruction.
 
@@ -86,6 +87,7 @@ The backend exposes this layer through:
 
 - `GET /api/tools`: returns model-facing function tool metadata.
 - `POST /api/tools/execute`: validates and applies one board mutation tool call.
+- `POST /api/ai/chat`: lets the model execute a bounded sequence of board mutation tools from a user instruction, then commits the final graph once.
 
 The initial tool set is:
 
@@ -118,6 +120,7 @@ The first implementation includes:
 - Refresh and refine controls for selected AI image boxes.
 - In-memory backend persistence.
 - History list with AI-generated 2 to 5 word commit descriptions.
+- Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
 - JSON state preview and screenshot capture.
 
 ## History Summary Request

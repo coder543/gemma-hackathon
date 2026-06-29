@@ -25,6 +25,7 @@ import {
   PenLine,
   Redo2,
   RefreshCw,
+  Send,
   Square,
   Trash2,
   Type,
@@ -99,6 +100,8 @@ type Board = { elements: WhiteboardElement[]; updatedAt: string }
 type Tool = 'select' | 'line' | 'box' | 'text' | 'image' | 'erase'
 type HistoryEntry = { id: number; at: string; description: string; elementCount: number }
 type HistoryPoint = { board: Board; historyId: number | null }
+type ChatMessage = { role: 'user' | 'assistant'; content: string }
+type GraphDiff = { added: number[]; removed: number[]; updated: number[] }
 type Draft = { tool: 'line' | 'box' | 'image'; start: Point; current: Point; startAnchor?: Anchor }
 type Drag = { id: number; origin: Point; element: WhiteboardElement }
 type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw'
@@ -126,6 +129,9 @@ function App() {
   const [endpointDrag, setEndpointDrag] = useState<EndpointDrag | null>(null)
   const [inlineEdit, setInlineEdit] = useState<InlineEdit | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatBusy, setChatBusy] = useState(false)
   const [undoDepth, setUndoDepth] = useState(0)
   const [redoDepth, setRedoDepth] = useState(0)
   const [repairingImageIds, setRepairingImageIds] = useState<Set<number>>(() => new Set())
@@ -635,6 +641,58 @@ function App() {
     }
   }
 
+  const submitChatEdit = async () => {
+    const message = chatInput.trim()
+    if (!message || chatBusy) return
+
+    const beforeBoard = lastCommittedBoardRef.current
+    const beforeHistoryId = currentHistoryIdRef.current
+    setChatInput('')
+    setChatMessages((current) => [...current, { role: 'user', content: message }])
+    setChatBusy(true)
+
+    try {
+      const response = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, discardHistoryAfterId: beforeHistoryId }),
+      })
+      const result = (await response.json()) as {
+        ok?: boolean
+        error?: string
+        board?: Board
+        history?: HistoryEntry[]
+        diff?: GraphDiff
+        message?: string
+      }
+
+      if (!response.ok || !result.board || !result.history || !result.diff) {
+        throw new Error(result.error ?? 'AI edit failed')
+      }
+
+      const changed = result.diff.added.length > 0 || result.diff.removed.length > 0 || result.diff.updated.length > 0
+      if (changed) {
+        undoStackRef.current.push({ board: beforeBoard, historyId: beforeHistoryId })
+        redoStackRef.current = []
+        setUndoDepth(undoStackRef.current.length)
+        setRedoDepth(redoStackRef.current.length)
+      }
+
+      setBoard(result.board)
+      lastCommittedBoardRef.current = result.board
+      setHistory(result.history)
+      const latestHistoryId = changed ? (result.history[0]?.id ?? beforeHistoryId) : beforeHistoryId
+      setCurrentHistoryId(latestHistoryId)
+      currentHistoryIdRef.current = latestHistoryId
+      setSelectedId((current) => result.board?.elements.some((element) => element.id === current) ? current : null)
+      setChatMessages((current) => [...current, { role: 'assistant', content: result.message ?? (changed ? 'Updated the whiteboard.' : 'No board changes were needed.') }])
+    } catch (error) {
+      setChatMessages((current) => [...current, { role: 'assistant', content: error instanceof Error ? error.message : 'AI edit failed' }])
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   return (
     <Box className="app-shell">
       <Paper className="topbar" elevation={0}>
@@ -769,6 +827,45 @@ function App() {
                 </Typography>
               </Box>
             ))}
+          </Stack>
+          <Divider />
+          <Typography variant="overline">Chat</Typography>
+          <Stack spacing={1} className="chat-panel">
+            <Stack spacing={0.75} className="chat-log">
+              {chatMessages.map((message, index) => (
+                <Box key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+                  <Typography variant="body2">{message.content}</Typography>
+                </Box>
+              ))}
+              {chatBusy && (
+                <Box className="chat-message assistant">
+                  <Typography variant="body2">Working...</Typography>
+                </Box>
+              )}
+            </Stack>
+            <Stack direction="row" spacing={1}>
+              <TextField
+                size="small"
+                placeholder="Ask Glyph to edit the board"
+                value={chatInput}
+                disabled={chatBusy}
+                fullWidth
+                onChange={(event) => setChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void submitChatEdit()
+                  }
+                }}
+              />
+              <Tooltip title="Send">
+                <span>
+                  <IconButton onClick={() => void submitChatEdit()} disabled={chatBusy || !chatInput.trim()}>
+                    <Send size={18} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
           </Stack>
           <Divider />
           <Typography variant="overline">LLM State</Typography>

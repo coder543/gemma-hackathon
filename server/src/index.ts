@@ -145,6 +145,11 @@ const refineImageSvgSchema = z.object({
   renderAttempts: z.array(svgAttemptSchema).optional(),
 });
 
+const chatEditSchema = z.object({
+  message: z.string().min(1),
+  discardHistoryAfterId: z.number().nullable().optional(),
+});
+
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 
@@ -196,13 +201,7 @@ app.put('/api/board', async (request, response) => {
     updatedAt: parsed.data.updatedAt,
   };
 
-  if (parsed.data.discardHistoryAfterId !== undefined && parsed.data.discardHistoryAfterId !== null) {
-    const cutoff = parsed.data.discardHistoryAfterId;
-    while (history.length > 0 && history[0].id > cutoff) {
-      history.shift();
-    }
-  }
-
+  discardFutureHistory(parsed.data.discardHistoryAfterId);
   const description = await summarizeCommittedChange(parsed.data.change, board);
   history.unshift({
     id: nextHistoryId,
@@ -336,6 +335,60 @@ app.post('/api/tools/execute', async (request, response) => {
   response.json({ ok: true, board, diff, history });
 });
 
+app.post('/api/ai/chat', async (request, response) => {
+  const parsed = chatEditSchema.safeParse(request.body);
+
+  if (!parsed.success) {
+    response.status(400).json({ error: 'Invalid chat edit payload', details: parsed.error.flatten() });
+    return;
+  }
+
+  const before = board;
+  let nextBoard: Board;
+  let assistantMessage: string;
+  let appliedToolCalls: Array<{ name: string; args: unknown }> = [];
+
+  try {
+    const result = await planBoardEditWithTools(parsed.data.message, before);
+    nextBoard = boardSchema.parse({
+      elements: result.elements,
+      updatedAt: new Date().toISOString(),
+    });
+    assistantMessage = result.message;
+    appliedToolCalls = result.toolCalls;
+  } catch (error) {
+    response.status(500).json({ error: error instanceof Error ? error.message : 'AI edit failed' });
+    return;
+  }
+
+  const diff = graphDiff(before.elements, nextBoard.elements);
+  if (diff.added.length === 0 && diff.removed.length === 0 && diff.updated.length === 0) {
+    response.json({ ok: true, board, diff, history, message: assistantMessage, toolCalls: appliedToolCalls });
+    return;
+  }
+
+  board = nextBoard;
+  discardFutureHistory(parsed.data.discardHistoryAfterId);
+  const description = await summarizeCommittedChange(
+    {
+      before,
+      after: nextBoard,
+      beforeScreenshot: null,
+      afterScreenshot: null,
+    },
+    board,
+  );
+  history.unshift({
+    id: nextHistoryId,
+    at: board.updatedAt,
+    description,
+    elementCount: board.elements.length,
+  });
+  nextHistoryId += 1;
+
+  response.json({ ok: true, board, diff, history, message: assistantMessage, toolCalls: appliedToolCalls });
+});
+
 app.post('/api/ai/turn', (_request, response) => {
   response.status(501).json({
     error: 'Cerebras integration is planned but not implemented yet.',
@@ -392,6 +445,160 @@ async function summarizeCommittedChange(change: CommitContext, currentBoard: Boa
   }
 }
 
+async function planBoardEditWithTools(instruction: string, currentBoard: Board) {
+  if (!process.env.CEREBRAS_API_KEY) {
+    const fallback = fallbackChatEdit(instruction, currentBoard.elements);
+    return {
+      elements: fallback.elements,
+      message: fallback.message,
+      toolCalls: fallback.toolCalls,
+    };
+  }
+
+  let workingElements = currentBoard.elements;
+  const appliedToolCalls: Array<{ name: string; args: unknown }> = [];
+  const messages: Array<
+    | { role: 'system'; content: string }
+    | { role: 'user'; content: string }
+    | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
+    | { role: 'tool'; tool_call_id: string; content: string }
+  > = [
+    {
+      role: 'system',
+      content:
+        'You are Glyph, a whiteboard editing partner. Use tool calls to directly implement the user request on the whiteboard graph. Prefer a small, complete set of changes. Use existing element IDs for updates and deletes. When creating connected diagrams, create boxes first, then lines anchored to their sides. Use coordinates that keep content readable on a 1600 by 1000 canvas. After tool calls are complete, reply with one short sentence.',
+    },
+    {
+      role: 'user',
+      content: `Current whiteboard JSON:\n${JSON.stringify(currentBoard.elements, null, 2)}\n\nUser request:\n${instruction}`,
+    },
+  ];
+
+  let finalMessage = 'Applied the requested whiteboard edit.';
+
+  for (let step = 0; step < 8; step += 1) {
+    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gemma-4-31b',
+        temperature: 0.2,
+        max_tokens: 1200,
+        messages,
+        tools: toolDefinitions,
+        tool_choice: 'auto',
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cerebras request failed with ${response.status}`);
+    }
+
+    const result = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string | null;
+          tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+        };
+      }>;
+    };
+    const message = result.choices?.[0]?.message;
+    if (!message) {
+      throw new Error('Cerebras response did not include a message');
+    }
+
+    const toolCalls = message.tool_calls ?? [];
+    messages.push({
+      role: 'assistant',
+      content: message.content ?? null,
+      tool_calls: toolCalls.map((toolCall, index) => ({
+        id: toolCall.id ?? `tool-${step}-${index}`,
+        type: 'function' as const,
+        function: {
+          name: toolCall.function?.name ?? '',
+          arguments: toolCall.function?.arguments ?? '{}',
+        },
+      })),
+    });
+
+    if (toolCalls.length === 0) {
+      finalMessage = normalizeAssistantSentence(message.content) || finalMessage;
+      break;
+    }
+
+    for (const [index, toolCall] of toolCalls.entries()) {
+      const id = toolCall.id ?? `tool-${step}-${index}`;
+      const name = toolCall.function?.name ?? '';
+      const args = parseToolArguments(toolCall.function?.arguments ?? '{}');
+      const parsed = toolCallSchema.safeParse({ name, args });
+
+      if (!parsed.success) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: id,
+          content: JSON.stringify({ ok: false, error: 'Invalid tool arguments', details: parsed.error.flatten() }),
+        });
+        continue;
+      }
+
+      try {
+        const beforeElements = workingElements;
+        workingElements = applyToolCall(workingElements, parsed.data);
+        const diff = graphDiff(beforeElements, workingElements);
+        appliedToolCalls.push({ name: parsed.data.name, args: parsed.data.args });
+        messages.push({
+          role: 'tool',
+          tool_call_id: id,
+          content: JSON.stringify({ ok: true, diff, board: workingElements }),
+        });
+      } catch (error) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: id,
+          content: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Tool call failed' }),
+        });
+      }
+    }
+  }
+
+  return { elements: workingElements, message: finalMessage, toolCalls: appliedToolCalls };
+}
+
+function parseToolArguments(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+function normalizeAssistantSentence(value: string | null | undefined) {
+  return value?.replace(/\s+/g, ' ').trim().slice(0, 240) ?? '';
+}
+
+function fallbackChatEdit(instruction: string, elements: WhiteboardElement[]) {
+  const trimmed = instruction.trim();
+  const element = {
+    id: nextElementId(elements),
+    type: 'text' as const,
+    text: trimmed,
+    x: 120,
+    y: 120,
+    width: 320,
+    height: 120,
+    style: { stroke: '#1f2937', fontSize: 18 },
+  };
+
+  return {
+    elements: [...elements, element],
+    message: 'Added your request as a note because Cerebras is not configured.',
+    toolCalls: [{ name: 'create_text', args: { text: trimmed, x: 120, y: 120, width: 320, height: 120 } }],
+  };
+}
+
 function commitMessageContent(change: NonNullable<CommitContext>) {
   const content: Array<
     | { type: 'text'; text: string }
@@ -443,6 +650,13 @@ function fallbackChangeDescription(change: CommitContext, currentBoard: Board) {
   if (removed) return `Deleted ${removed.type}`;
   if (change.before.elements.length === 0 && change.after.elements.length === 0) return 'Updated empty board';
   return 'Updated whiteboard';
+}
+
+function discardFutureHistory(cutoff: number | null | undefined) {
+  if (cutoff === undefined || cutoff === null) return;
+  while (history.length > 0 && history[0].id > cutoff) {
+    history.shift();
+  }
 }
 
 async function generateImageSvg(description: string) {
