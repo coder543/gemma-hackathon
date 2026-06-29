@@ -256,11 +256,16 @@ function App() {
 
   const commitSelectedPatch = (patch: Partial<WhiteboardElement>) => {
     if (selectedId === null) return
-    void commitBoard(
-      board.elements.map((element) =>
-        element.id === selectedId ? ({ ...element, ...patch } as WhiteboardElement) : element,
-      ),
-    )
+    const element = board.elements.find((candidate) => candidate.id === selectedId)
+    const nextDescription = 'description' in patch ? patch.description : undefined
+    if (element?.type === 'image' && typeof nextDescription === 'string' && nextDescription !== element.description) {
+      void regenerateImageDescription(element, nextDescription)
+      return
+    }
+
+    void commitBoard(board.elements.map((candidate) => (
+      candidate.id === selectedId ? ({ ...candidate, ...patch } as WhiteboardElement) : candidate
+    )))
   }
 
   const zoomBoard = (direction: -1 | 1) => {
@@ -664,6 +669,34 @@ function App() {
       })
       const result = await response.json()
       const nextDescription = mode === 'refine' ? `${element.description}; ${instruction}` : element.description
+      const fitted = fitFrameToSvg(element, result.svg)
+      const elements = board.elements.map((candidate) =>
+        candidate.id === element.id
+          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
+          : candidate,
+      )
+      void commitBoard(elements)
+    } finally {
+      setGeneratingImageIds((current) => {
+        const next = new Set(current)
+        next.delete(element.id)
+        return next
+      })
+    }
+  }
+
+  const regenerateImageDescription = async (element: ImageElement, description: string) => {
+    const nextDescription = description.trim()
+    if (!nextDescription || nextDescription === element.description) return
+
+    setGeneratingImageIds((current) => new Set(current).add(element.id))
+    try {
+      const response = await fetch('/api/ai/image-svg', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: nextDescription }),
+      })
+      const result = await response.json()
       const fitted = fitFrameToSvg(element, result.svg)
       const elements = board.elements.map((candidate) =>
         candidate.id === element.id

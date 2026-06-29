@@ -303,7 +303,7 @@ app.post('/api/tools/execute', async (request, response) => {
   let diff: ReturnType<typeof graphDiff>;
 
   try {
-    const nextElements = applyToolCall(board.elements, parsed.data);
+    const nextElements = await applyToolCall(board.elements, parsed.data);
     nextBoard = boardSchema.parse({
       elements: nextElements,
       updatedAt: new Date().toISOString(),
@@ -511,7 +511,7 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
 
       try {
         const beforeElements = workingElements;
-        workingElements = applyToolCall(workingElements, parsed.data);
+        workingElements = await applyToolCall(workingElements, parsed.data);
         const diff = graphDiff(beforeElements, workingElements);
         appliedToolCalls.push({ name: parsed.data.name, args: parsed.data.args });
         messages.push({
@@ -786,7 +786,7 @@ function escapeXml(value: string) {
     .replace(/'/g, '&apos;');
 }
 
-function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof toolCallSchema>) {
+async function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof toolCallSchema>) {
   switch (toolCall.name) {
     case 'create_box':
       return [...elements, { id: nextElementId(elements), type: 'box' as const, ...toolCall.args }];
@@ -797,15 +797,34 @@ function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<typeof t
     case 'create_image':
       return [...elements, { id: nextElementId(elements), type: 'image' as const, ...toolCall.args }];
     case 'update_element':
-      return elements.map((element) => {
+      return Promise.all(elements.map(async (element) => {
         if (element.id !== toolCall.args.id) return element;
+        const patch = toolCall.args.patch;
+        if (
+          element.type === 'image' &&
+          typeof patch.description === 'string' &&
+          patch.description.trim() &&
+          patch.description !== element.description
+        ) {
+          const result = await generateImageSvg(patch.description);
+          return imageSchema.parse({
+            ...element,
+            ...patch,
+            description: patch.description,
+            svg: result.svg,
+            renderAttempts: result.renderAttempts,
+            id: element.id,
+            type: element.type,
+          });
+        }
+
         return elementSchema.parse({
           ...element,
-          ...toolCall.args.patch,
+          ...patch,
           id: element.id,
           type: element.type,
         });
-      });
+      }));
     case 'delete_element':
       return elements.filter((element) => element.id !== toolCall.args.id);
     case 'clear_board':

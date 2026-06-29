@@ -69,6 +69,7 @@ Implemented use cases:
 - Chat-directed board edits: the user can ask Glyph to change the whiteboard, the backend gives `gemma-4-31b` the current graph plus mutation tools, and the final tool-call result is committed as one board edit.
 
 SVG image generation asks for clean vector composition and at least one subtle declarative animation by default, using native SVG animation or inline CSS keyframes. The image box expands by the minimum amount needed to match the generated SVG aspect ratio. If generated SVG fails browser parsing or loading, the frontend sends the error plus the full prior render-attempt history back to the backend so the model can repair the element. Selected image boxes expose refresh and refine controls for regenerating from the description or applying a follow-up instruction.
+When an image box description changes, either from the inspector or from an LLM `update_element` tool call, Glyph regenerates the SVG if the new description differs from the previous one.
 
 The full assistant loop remains deferred until more focused interactive workflows prove useful.
 
