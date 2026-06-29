@@ -461,7 +461,6 @@ async function planBoardEditWithTools(instruction: string, currentBoard: Board) 
     const result = await requestCerebrasChat({
         model: 'gemma-4-31b',
         temperature: 0.2,
-        max_tokens: 1200,
         messages,
         tools: toolDefinitions,
         tool_choice: 'auto',
@@ -537,7 +536,7 @@ function parseToolArguments(value: string) {
 }
 
 function normalizeAssistantSentence(value: string | null | undefined) {
-  return value?.replace(/\s+/g, ' ').trim().slice(0, 240) ?? '';
+  return value?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
 async function requestCerebrasChat(payload: unknown) {
