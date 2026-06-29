@@ -91,7 +91,8 @@ type SvgAttempt = {
 type ImageElement = {
   id: number
   type: 'image'
-  description: string
+  imageGenerationInput: string
+  label?: string
   svg: string
   x: number
   y: number
@@ -257,9 +258,9 @@ function App() {
   const commitSelectedPatch = (patch: Partial<WhiteboardElement>) => {
     if (selectedId === null) return
     const element = board.elements.find((candidate) => candidate.id === selectedId)
-    const nextDescription = 'description' in patch ? patch.description : undefined
-    if (element?.type === 'image' && typeof nextDescription === 'string' && nextDescription !== element.description) {
-      void regenerateImageDescription(element, nextDescription)
+    const nextImageGenerationInput = 'imageGenerationInput' in patch ? patch.imageGenerationInput : undefined
+    if (element?.type === 'image' && typeof nextImageGenerationInput === 'string' && nextImageGenerationInput !== element.imageGenerationInput) {
+      void regenerateImageInput(element, nextImageGenerationInput)
       return
     }
 
@@ -314,9 +315,11 @@ function App() {
 
   const handlePointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (event.target !== event.currentTarget) return
+    if (inlineEdit) {
+      finishInlineEdit(true)
+    }
     const point = pointFromSvgEvent(event)
     setSelectedId(null)
-    setInlineEdit(null)
 
     if (tool === 'line' || tool === 'box' || tool === 'image') {
       captureBeforeSnapshot()
@@ -421,9 +424,9 @@ function App() {
         setSelectedId(element.id)
       }
       if (draft.tool === 'image' && width > 8 && height > 8) {
-        const description = window.prompt('Describe the image')
-        if (description) {
-          void createImageElement(description, {
+        const imageGenerationInput = window.prompt('Image generation input')
+        if (imageGenerationInput) {
+          void createImageElement(imageGenerationInput, {
             x: Math.min(draft.start.x, current.x),
             y: Math.min(draft.start.y, current.y),
             width,
@@ -441,9 +444,16 @@ function App() {
     }
 
     if (endpointDrag) {
-      const anchor = anchorAtPoint(board.elements.filter((element) => element.id !== endpointDrag.id), point)
-      const finalPoint = anchor ? pointForAnchor(board.elements, anchor) : point
-      const finalElements = board.elements.map((element) => moveLineEndpoint(element, endpointDrag, finalPoint, anchor))
+      const baseElements = lastCommittedBoardRef.current.elements
+      const currentPoint = pointForEndpointDrag(endpointDrag, board.elements)
+      if (Math.hypot(currentPoint.x - pointForEndpointDrag(endpointDrag, baseElements).x, currentPoint.y - pointForEndpointDrag(endpointDrag, baseElements).y) < 2) {
+        beforeScreenshotRef.current = null
+        setEndpointDrag(null)
+        return
+      }
+      const anchor = anchorAtPoint(baseElements.filter((element) => element.id !== endpointDrag.id), point)
+      const finalPoint = anchor ? pointForAnchor(baseElements, anchor) : point
+      const finalElements = baseElements.map((element) => moveLineEndpoint(element, endpointDrag, finalPoint, anchor))
       if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
         void commitBoard(finalElements)
       } else {
@@ -455,7 +465,13 @@ function App() {
     if (resize) {
       const dx = point.x - resize.origin.x
       const dy = point.y - resize.origin.y
-      const finalElements = board.elements.map((element) => resizeElement(element, resize, dx, dy))
+      if (Math.hypot(dx, dy) < 2) {
+        beforeScreenshotRef.current = null
+        setResize(null)
+        return
+      }
+      const baseElements = lastCommittedBoardRef.current.elements
+      const finalElements = baseElements.map((element) => resizeElement(element, resize, dx, dy))
       if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
         void commitBoard(finalElements)
       } else {
@@ -467,7 +483,13 @@ function App() {
     if (drag) {
       const dx = point.x - drag.origin.x
       const dy = point.y - drag.origin.y
-      const finalElements = board.elements.map((element) => moveElement(element, drag, dx, dy))
+      if (Math.hypot(dx, dy) < 3) {
+        beforeScreenshotRef.current = null
+        setDrag(null)
+        return
+      }
+      const baseElements = lastCommittedBoardRef.current.elements
+      const finalElements = baseElements.map((element) => moveElement(element, drag, dx, dy))
       if (elementsChanged(lastCommittedBoardRef.current.elements, finalElements)) {
         void commitBoard(finalElements)
       } else {
@@ -479,7 +501,9 @@ function App() {
 
   const handleElementPointerDown = (element: WhiteboardElement, event: PointerEvent<SVGGElement>) => {
     event.stopPropagation()
-    setInlineEdit(null)
+    if (inlineEdit) {
+      finishInlineEdit(true)
+    }
 
     if (tool === 'erase') {
       void commitBoard(board.elements.filter((candidate) => candidate.id !== element.id))
@@ -560,8 +584,18 @@ function App() {
   }
 
   const clearBoard = async () => {
-    captureBeforeSnapshot()
-    await commitBoard([])
+    const response = await fetch('/api/board/clear', { method: 'POST' })
+    const result = await response.json() as { board: Board; history: HistoryEntry[] }
+    setBoard(result.board)
+    lastCommittedBoardRef.current = result.board
+    undoStackRef.current = []
+    redoStackRef.current = []
+    setUndoDepth(0)
+    setRedoDepth(0)
+    setHistory(result.history)
+    setCurrentHistoryId(result.history[0]?.id ?? null)
+    currentHistoryIdRef.current = result.history[0]?.id ?? null
+    setChatMessages([])
     setSelectedId(null)
     setInlineEdit(null)
     beforeScreenshotRef.current = null
@@ -591,18 +625,18 @@ function App() {
     beforeScreenshotRef.current = captureBoardScreenshot(lastCommittedBoardRef.current.elements)
   }
 
-  const createImageElement = async (description: string, frame: { x: number; y: number; width: number; height: number }) => {
+  const createImageElement = async (imageGenerationInput: string, frame: { x: number; y: number; width: number; height: number }) => {
     const response = await fetch('/api/ai/image-svg', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ imageGenerationInput }),
     })
     const result = await response.json()
     const fitted = fitFrameToSvg(frame, result.svg)
     const element: ImageElement = {
       id: nextId,
       type: 'image',
-      description,
+      imageGenerationInput,
       svg: result.svg,
       renderAttempts: result.renderAttempts,
       x: frame.x,
@@ -624,7 +658,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          description: element.description,
+          imageGenerationInput: element.imageGenerationInput,
           svg: element.svg,
           error,
           renderAttempts: element.renderAttempts ?? [],
@@ -647,7 +681,7 @@ function App() {
   }
 
   const updateGeneratedImage = async (element: ImageElement, mode: 'regenerate' | 'refine') => {
-    const instruction = mode === 'refine' ? window.prompt('How should Glyph refine this image?', element.description) : null
+    const instruction = mode === 'refine' ? window.prompt('How should Glyph refine this image?', element.imageGenerationInput) : null
     if (mode === 'refine' && !instruction) return
 
     setGeneratingImageIds((current) => new Set(current).add(element.id))
@@ -658,9 +692,9 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           mode === 'regenerate'
-            ? { description: element.description }
+            ? { imageGenerationInput: element.imageGenerationInput }
             : {
-                description: element.description,
+                imageGenerationInput: element.imageGenerationInput,
                 instruction,
                 svg: element.svg,
                 renderAttempts: element.renderAttempts ?? [],
@@ -668,11 +702,11 @@ function App() {
         ),
       })
       const result = await response.json()
-      const nextDescription = mode === 'refine' ? `${element.description}; ${instruction}` : element.description
+      const nextImageGenerationInput = mode === 'refine' ? `${element.imageGenerationInput}; ${instruction}` : element.imageGenerationInput
       const fitted = fitFrameToSvg(element, result.svg)
       const elements = board.elements.map((candidate) =>
         candidate.id === element.id
-          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
+          ? ({ ...element, imageGenerationInput: nextImageGenerationInput, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
           : candidate,
       )
       void commitBoard(elements)
@@ -685,22 +719,22 @@ function App() {
     }
   }
 
-  const regenerateImageDescription = async (element: ImageElement, description: string) => {
-    const nextDescription = description.trim()
-    if (!nextDescription || nextDescription === element.description) return
+  const regenerateImageInput = async (element: ImageElement, imageGenerationInput: string) => {
+    const nextImageGenerationInput = imageGenerationInput.trim()
+    if (!nextImageGenerationInput || nextImageGenerationInput === element.imageGenerationInput) return
 
     setGeneratingImageIds((current) => new Set(current).add(element.id))
     try {
       const response = await fetch('/api/ai/image-svg', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: nextDescription }),
+        body: JSON.stringify({ imageGenerationInput: nextImageGenerationInput }),
       })
       const result = await response.json()
       const fitted = fitFrameToSvg(element, result.svg)
       const elements = board.elements.map((candidate) =>
         candidate.id === element.id
-          ? ({ ...element, description: nextDescription, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
+          ? ({ ...element, imageGenerationInput: nextImageGenerationInput, svg: result.svg, renderAttempts: result.renderAttempts, width: fitted.width, height: fitted.height } satisfies ImageElement)
           : candidate,
       )
       void commitBoard(elements)
@@ -1032,7 +1066,7 @@ async function captureBoardScreenshot(elements: WhiteboardElement[]) {
   container.style.height = `${bounds.height}px`
   container.style.overflow = 'hidden'
   container.style.background = '#f8fafc'
-  container.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${bounds.width}" height="${bounds.height}" viewBox="${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}" class="board screenshot-board">
+  container.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${bounds.width}" height="${bounds.height}" viewBox="${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}" class="board screenshot-board" style="--board-bg:#f8fafc;--board-grid:#dbe3ee;--board-border:#cbd5e1;--board-text:#111827;--image-frame-bg:#ffffff;--text:#111827;--border:rgba(15,23,42,.18);--canvas-node-bg:rgba(255,255,255,.86);--canvas-node-text:#111827;">
     <defs>
       <marker id="screenshot-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
@@ -1126,6 +1160,9 @@ function elementBounds(element: WhiteboardElement, elements: WhiteboardElement[]
     const maxY = Math.max(points.start.y, points.end.y)
     return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
   }
+  if (element.type === 'image') {
+    return { x: element.x, y: element.y, width: element.width, height: element.height + (element.label ? 32 : 0) }
+  }
   return { x: element.x, y: element.y, width: element.width, height: elementHeight(element) }
 }
 
@@ -1158,11 +1195,16 @@ function screenshotElementSvg(element: WhiteboardElement, elements: WhiteboardEl
     return `<foreignObject x="${element.x}" y="${element.y}" width="${element.width}" height="${elementHeight(element)}"><div xmlns="http://www.w3.org/1999/xhtml" class="text-node">${escapeXml(element.text)}</div></foreignObject>`
   }
 
-  return `<foreignObject x="${element.x}" y="${element.y}" width="${element.width}" height="${element.height}"><img xmlns="http://www.w3.org/1999/xhtml" class="image-node" src="${escapeXml(svgDataUrl(element.svg))}" style="width:100%;height:100%;object-fit:contain;"/></foreignObject>`
+  const label = element.label ? screenshotText(element.label, element.x + element.width / 2, imageLabelY(element), element.width, 14) : ''
+  return `<foreignObject x="${element.x}" y="${element.y}" width="${element.width}" height="${element.height}"><img xmlns="http://www.w3.org/1999/xhtml" class="image-node" src="${escapeXml(svgDataUrl(element.svg))}" style="width:100%;height:100%;object-fit:contain;"/></foreignObject>${label}`
 }
 
 function screenshotText(text: string, x: number, y: number, width: number, fontSize = 16) {
   return `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-family="Inter, system-ui, sans-serif" font-size="${fontSize}" fill="#111827">${escapeXml(text.slice(0, Math.max(12, Math.floor(width / 7))))}</text>`
+}
+
+function imageLabelY(element: ImageElement) {
+  return element.y + element.height + 20
 }
 
 function escapeXml(value: string) {
@@ -1444,13 +1486,14 @@ function Inspector({
             Refresh
           </Button>
           <Button size="small" variant="outlined" disabled={busy} onClick={() => onRefineImage(element)}>
-            Refine
+            Refine image...
           </Button>
         </Stack>
-        <TextField label="Description" size="small" multiline minRows={3} value={values.description} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, description: event.target.value })} onBlur={() => commit('description')} />
+        <TextField label="Label" size="small" value={values.label} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, label: event.target.value })} onBlur={() => commit('label')} onKeyDown={blurOnEnter} />
+        <TextField label="Image generation input" size="small" multiline minRows={3} value={values.imageGenerationInput} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, imageGenerationInput: event.target.value })} onBlur={() => commit('imageGenerationInput')} />
         <TextField label="Width" size="small" type="number" value={values.width} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, width: event.target.value })} onBlur={() => commit('width')} onKeyDown={blurOnEnter} />
         <TextField label="Height" size="small" type="number" value={values.height} onFocus={onBeginEdit} onChange={(event) => setValues({ ...values, height: event.target.value })} onBlur={() => commit('height')} onKeyDown={blurOnEnter} />
-        <Typography variant="caption" color="text.secondary">SVG render failures are sent back to the model for repair.</Typography>
+        <Typography variant="caption" color="text.secondary">Refine prompts for one follow-up instruction. SVG render failures are sent back to the model for repair.</Typography>
       </Stack>
     )
   }
@@ -1478,7 +1521,7 @@ function inspectorValues(element: WhiteboardElement): Record<string, string> {
     return { text: element.text, width: String(Math.round(element.width)), height: String(Math.round(elementHeight(element))) }
   }
   if (element.type === 'image') {
-    return { description: element.description, width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
+    return { label: element.label ?? '', imageGenerationInput: element.imageGenerationInput, width: String(Math.round(element.width)), height: String(Math.round(element.height)) }
   }
   return { lineStyle: element.lineStyle, label: element.label ?? '' }
 }
@@ -1522,15 +1565,16 @@ function ElementView({
     return (
       <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
         <line x1={points.start.x} y1={points.start.y} x2={points.end.x} y2={points.end.y} stroke={stroke} strokeWidth={strokeWidth} markerEnd={element.lineStyle === 'arrow' || element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} markerStart={element.lineStyle === 'doubleArrow' ? 'url(#arrow)' : undefined} />
-        {element.label && !editing && <text x={(points.start.x + points.end.x) / 2} y={(points.start.y + points.end.y) / 2 - 8} textAnchor="middle" fontSize="14" fill="#111827">{element.label}</text>}
+        {element.label && !editing && <text className="line-label" x={(points.start.x + points.end.x) / 2} y={(points.start.y + points.end.y) / 2 - 8} textAnchor="middle" fontSize="14">{element.label}</text>}
       </g>
     )
   }
   if (element.type === 'image') {
     return (
       <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
-        <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill="#ffffff" stroke={selected ? '#2563eb' : '#cbd5e1'} strokeWidth="2" />
+        <rect x={element.x} y={element.y} width={element.width} height={element.height} rx="4" fill="var(--image-frame-bg)" stroke={selected ? '#2563eb' : 'var(--board-border)'} strokeWidth="2" />
         <ImageSvgView element={element} onError={onImageError} />
+        {element.label && <text className="image-label" x={element.x + element.width / 2} y={imageLabelY(element)} textAnchor="middle" fontSize="14">{element.label}</text>}
       </g>
     )
   }
@@ -1538,7 +1582,7 @@ function ElementView({
     <g onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} className={selected ? 'element selected' : 'element'}>
       {!editing && (
         <foreignObject className="text-foreign-object" x={element.x} y={element.y} width={element.width} height={elementHeight(element)}>
-          <div className="text-node" style={{ color: element.style?.stroke, fontSize: element.style?.fontSize }}>{element.text}</div>
+          <div className="text-node" style={{ color: element.style?.stroke ?? 'var(--canvas-node-text)', fontSize: element.style?.fontSize }}>{element.text}</div>
         </foreignObject>
       )}
     </g>

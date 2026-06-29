@@ -44,7 +44,7 @@ Supported element types:
 - `box`: `rectangle`, `oval`, or `cloud`; may have a text `label`.
 - `line`: `plain`, `arrow`, or `doubleArrow`; may be anchored to box or image-box sides.
 - `text`: floating editable text object.
-- `image`: AI-generated SVG image box with a user `description`, generated `svg`, and render-attempt history.
+- `image`: AI-generated SVG image box with `imageGenerationInput`, optional visible `label`, generated `svg`, and render-attempt history.
 
 Anchors override positional information for the anchored endpoint. Free endpoints keep absolute coordinates. Boxes and image boxes are anchor targets. When the user draws or drags a line endpoint, side targets appear and the endpoint snaps to the nearest target within a short distance.
 Boxes, floating text, and image boxes are resizable. Box labels and floating text wrap within their visible bounds.
@@ -52,11 +52,12 @@ Boxes, floating text, and image boxes are resizable. Box labels and floating tex
 ## Architecture
 
 - Frontend: TypeScript React with Vite and MUI.
+- The app uses MUI's light/dark theme provider from `prefers-color-scheme` for component theming. Custom CSS variables are reserved for the whiteboard canvas, SVG overlays, and app layout surfaces.
 - Backend: minimal TypeScript Express service.
 - Persistence: in-memory for the prototype, replaceable with file or database storage.
 - AI proxy: backend endpoint will call Cerebras with `CEREBRAS_API_KEY`.
 - LLM requests retry transient Cerebras 5xx responses after a 1 second delay, up to 3 retries.
-- Multimodal context: frontend captures a cropped populated-board screenshot with `html2canvas` and sends it with serialized graph state.
+- Multimodal context: frontend captures a cropped populated-board screenshot with `html2canvas` and sends it with serialized graph state. AI screenshots are rendered with a stable light board theme even when the live UI is in dark mode.
 
 ## Interactive AI
 
@@ -65,11 +66,11 @@ The current AI direction prioritizes bounded interactive use cases instead of a 
 Implemented use cases:
 
 - History summaries: each committed edit sends before/after graph state and screenshots to `gemma-4-31b` for a 2 to 5 word label.
-- AI image boxes: the user drags the desired image frame, describes the image, the backend asks `gemma-4-31b` for standalone SVG, and the browser renders it as a resizable board element.
+- AI image boxes: the user drags the desired image frame, enters image generation input, the backend asks `gemma-4-31b` for standalone SVG, and the browser renders it as a resizable board element with an optional caption label beneath it.
 - Chat-directed board edits: the user can ask Glyph to change the whiteboard, the backend gives `gemma-4-31b` the current graph plus mutation tools, and the final tool-call result is committed as one board edit.
 
-SVG image generation asks for clean vector composition and at least one subtle declarative animation by default, using native SVG animation or inline CSS keyframes. The image box expands by the minimum amount needed to match the generated SVG aspect ratio. If generated SVG fails browser parsing or loading, the frontend sends the error plus the full prior render-attempt history back to the backend so the model can repair the element. Selected image boxes expose refresh and refine controls for regenerating from the description or applying a follow-up instruction.
-When an image box description changes, either from the inspector or from an LLM `update_element` tool call, Glyph regenerates the SVG if the new description differs from the previous one.
+SVG image generation asks for clean vector composition and at least one subtle declarative animation by default, using native SVG animation or inline CSS keyframes. The image box expands by the minimum amount needed to match the generated SVG aspect ratio. If generated SVG fails browser parsing or loading, the frontend sends the error plus the full prior render-attempt history back to the backend so the model can repair the element. Selected image boxes expose refresh and refine controls for regenerating from the image generation input or applying a follow-up instruction.
+When an image box `imageGenerationInput` changes, either from the inspector or from an LLM `update_element` tool call, Glyph regenerates the SVG if the new input differs from the previous one. Changing the separate `label` only updates the visible caption.
 
 The full assistant loop remains deferred until more focused interactive workflows prove useful.
 
@@ -128,6 +129,8 @@ The first implementation includes:
 - Chat box for asking Glyph to create, update, connect, or delete whiteboard elements through model tool calls.
 - Collapsed JSON state preview.
 - Independently collapsible left and right sidebars so the board can use more space.
+- Light and dark UI themes follow the user's device theme, including the live whiteboard canvas.
+- Clear board resets the board, edit history, undo/redo stacks, and chat history.
 
 ## History Summary Request
 

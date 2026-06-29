@@ -21,6 +21,7 @@
 - [x] Add line endpoint editing.
 - [x] Allow selected box shape and line style changes from the inspector.
 - [x] Delete the selected element with Backspace/Delete when focus is not in an editor.
+- [x] Clear board resets edit history, undo/redo stacks, and chat history.
 - [x] Render cloud boxes with a better cloud shape.
 - [x] Add undo/redo.
 - [x] Treat history as a timeline: grey future entries on undo/redo, delete them on a branching edit, and skip AI titles for undo/redo navigation.
@@ -37,14 +38,16 @@
 
 - [x] Implement Cerebras-backed history summary requests using `CEREBRAS_API_KEY`.
 - [x] Add separate summary request for history sidebar descriptions.
-- [x] Add AI-generated SVG image boxes from user descriptions.
+- [x] Add AI-generated SVG image boxes from image generation inputs.
 - [x] Encourage animated SVG output for generated image boxes.
 - [x] Detect SVG render failures and automatically ask the model to repair using previous render-attempt history.
 - [x] Add regenerate/refine controls for AI image boxes.
-- [x] Prompt for AI image descriptions after the user drags the desired frame and fit generated SVG aspect ratios.
+- [x] Prompt for AI image generation input after the user drags the desired frame and fit generated SVG aspect ratios.
+- [x] Add separate visible labels for AI image boxes.
 - [x] Add a chat box that turns user requests into model-driven whiteboard tool calls.
 - [x] Retry transient Cerebras 5xx responses automatically.
 - [x] Keep chat history scrolled to the latest user and model messages.
+- [x] Add device-theme-aware light/dark UI and board theming.
 - [ ] Add more focused interactive AI commands for selected board elements.
 
 ## Deferred: Assistant Loop

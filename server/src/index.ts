@@ -66,7 +66,8 @@ const svgAttemptSchema = z.object({
 const imageSchema = z.object({
   id: z.number(),
   type: z.literal('image'),
-  description: z.string(),
+  imageGenerationInput: z.string(),
+  label: z.string().optional(),
   svg: z.string(),
   x: z.number(),
   y: z.number(),
@@ -128,18 +129,18 @@ const toolCallSchema = z.discriminatedUnion('name', [
 ]);
 
 const generateImageSvgSchema = z.object({
-  description: z.string().min(1),
+  imageGenerationInput: z.string().min(1),
 });
 
 const repairImageSvgSchema = z.object({
-  description: z.string().min(1),
+  imageGenerationInput: z.string().min(1),
   svg: z.string(),
   error: z.string(),
   renderAttempts: z.array(svgAttemptSchema).optional(),
 });
 
 const refineImageSvgSchema = z.object({
-  description: z.string().min(1),
+  imageGenerationInput: z.string().min(1),
   svg: z.string(),
   instruction: z.string().min(1),
   renderAttempts: z.array(svgAttemptSchema).optional(),
@@ -219,13 +220,8 @@ app.post('/api/board/clear', (_request, response) => {
     elements: [],
     updatedAt: new Date().toISOString(),
   };
-  history.unshift({
-    id: nextHistoryId,
-    at: board.updatedAt,
-    description: 'Cleared the board.',
-    elementCount: 0,
-  });
-  nextHistoryId += 1;
+  history.splice(0);
+  nextHistoryId = 1;
 
   response.json({ ok: true, board, history });
 });
@@ -254,11 +250,11 @@ app.post('/api/ai/image-svg', async (request, response) => {
   const parsed = generateImageSvgSchema.safeParse(request.body);
 
   if (!parsed.success) {
-    response.status(400).json({ error: 'Invalid image description', details: parsed.error.flatten() });
+    response.status(400).json({ error: 'Invalid image generation input', details: parsed.error.flatten() });
     return;
   }
 
-  const result = await generateImageSvg(parsed.data.description);
+  const result = await generateImageSvg(parsed.data.imageGenerationInput);
   response.json(result);
 });
 
@@ -662,17 +658,17 @@ function discardFutureHistory(cutoff: number | null | undefined) {
   }
 }
 
-async function generateImageSvg(description: string) {
+async function generateImageSvg(imageGenerationInput: string) {
   const attempts: SvgAttempt[] = [
     {
       role: 'user' as const,
-      content: imageSvgPrompt(description),
+      content: imageSvgPrompt(imageGenerationInput),
     },
   ];
 
   const svg = process.env.CEREBRAS_API_KEY
     ? await requestSvgFromCerebras(attempts)
-    : fallbackSvg(description);
+    : fallbackSvg(imageGenerationInput);
 
   attempts.push({ role: 'assistant' as const, content: svg });
   return { svg, renderAttempts: attempts };
@@ -683,13 +679,13 @@ async function repairImageSvg(payload: z.infer<typeof repairImageSvgSchema>) {
     ...(payload.renderAttempts ?? []),
     {
       role: 'user' as const,
-      content: `The previous SVG failed to render.\n\nBrowser/render error:\n${payload.error}\n\nBroken SVG:\n${payload.svg}\n\nReturn a corrected standalone SVG only. Preserve the requested image: ${payload.description}`,
+      content: `The previous SVG failed to render.\n\nBrowser/render error:\n${payload.error}\n\nBroken SVG:\n${payload.svg}\n\nReturn a corrected standalone SVG only. Preserve the requested image: ${payload.imageGenerationInput}`,
     },
   ];
 
   const svg = process.env.CEREBRAS_API_KEY
     ? await requestSvgFromCerebras(attempts)
-    : fallbackSvg(payload.description);
+    : fallbackSvg(payload.imageGenerationInput);
 
   attempts.push({ role: 'assistant' as const, content: svg });
   return { svg, renderAttempts: attempts };
@@ -700,13 +696,13 @@ async function refineImageSvg(payload: z.infer<typeof refineImageSvgSchema>) {
     ...(payload.renderAttempts ?? []),
     {
       role: 'user' as const,
-      content: `Refine this SVG image box.\n\nOriginal description:\n${payload.description}\n\nUser refinement instruction:\n${payload.instruction}\n\nCurrent SVG:\n${payload.svg}\n\nReturn an updated standalone SVG only. Preserve useful existing visual structure unless the instruction asks otherwise. Keep or improve subtle animation when appropriate.`,
+      content: `Refine this SVG image box.\n\nOriginal image generation input:\n${payload.imageGenerationInput}\n\nUser refinement instruction:\n${payload.instruction}\n\nCurrent SVG:\n${payload.svg}\n\nReturn an updated standalone SVG only. Preserve useful existing visual structure unless the instruction asks otherwise. Keep or improve subtle animation when appropriate.`,
     },
   ];
 
   const svg = process.env.CEREBRAS_API_KEY
     ? await requestSvgFromCerebras(attempts)
-    : fallbackSvg(`${payload.description} ${payload.instruction}`);
+    : fallbackSvg(`${payload.imageGenerationInput} ${payload.instruction}`);
 
   attempts.push({ role: 'assistant' as const, content: svg });
   return { svg, renderAttempts: attempts };
@@ -737,8 +733,8 @@ async function requestSvgFromCerebras(attempts: SvgAttempt[]) {
   }
 }
 
-function imageSvgPrompt(description: string) {
-  return `Create an expressive SVG image for this whiteboard image box: ${description}
+function imageSvgPrompt(imageGenerationInput: string) {
+  return `Create an expressive SVG image for this whiteboard image box: ${imageGenerationInput}
 
 Requirements:
 - Return only a single complete <svg>...</svg> document.
@@ -763,8 +759,8 @@ function cleanSvgMarkup(markup: string) {
   return withoutFences.slice(start, end + '</svg>'.length);
 }
 
-function fallbackSvg(description: string) {
-  const escaped = escapeXml(description).slice(0, 120);
+function fallbackSvg(imageGenerationInput: string) {
+  const escaped = escapeXml(imageGenerationInput).slice(0, 120);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
   <style>
     @keyframes pulse { 0%, 100% { opacity: .72; transform: scale(1); } 50% { opacity: 1; transform: scale(1.04); } }
@@ -802,15 +798,15 @@ async function applyToolCall(elements: WhiteboardElement[], toolCall: z.infer<ty
         const patch = toolCall.args.patch;
         if (
           element.type === 'image' &&
-          typeof patch.description === 'string' &&
-          patch.description.trim() &&
-          patch.description !== element.description
+          typeof patch.imageGenerationInput === 'string' &&
+          patch.imageGenerationInput.trim() &&
+          patch.imageGenerationInput !== element.imageGenerationInput
         ) {
-          const result = await generateImageSvg(patch.description);
+          const result = await generateImageSvg(patch.imageGenerationInput);
           return imageSchema.parse({
             ...element,
             ...patch,
-            description: patch.description,
+            imageGenerationInput: patch.imageGenerationInput,
             svg: result.svg,
             renderAttempts: result.renderAttempts,
             id: element.id,
@@ -966,11 +962,12 @@ const toolDefinitions = [
     type: 'function',
     function: {
       name: 'create_image',
-      description: 'Create an AI-generated SVG image box from a description.',
+      description: 'Create an AI-generated SVG image box from an image generation input and optional visible label.',
       parameters: {
         type: 'object',
         properties: {
-          description: { type: 'string' },
+          imageGenerationInput: { type: 'string' },
+          label: { type: 'string' },
           svg: { type: 'string' },
           x: { type: 'number' },
           y: { type: 'number' },
@@ -978,7 +975,7 @@ const toolDefinitions = [
           height: { type: 'number' },
           renderAttempts: { type: 'array', items: { type: 'object' } },
         },
-        required: ['description', 'svg', 'x', 'y', 'width', 'height'],
+        required: ['imageGenerationInput', 'svg', 'x', 'y', 'width', 'height'],
       },
     },
   },
